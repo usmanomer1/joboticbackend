@@ -103,7 +103,7 @@ class ResumeAnalysisService {
       // Get AI analysis
       const response = await geminiClient.generateJSON(prompt, {
         temperature: 0.3, // Low temperature for consistent analysis
-        maxOutputTokens: 2048
+        maxOutputTokens: 4096 // Increased for complex analysis output
       });
       
       // Validate and normalize response
