@@ -1,30 +1,10 @@
 /**
- * PDF generation utility using Puppeteer
+ * PDF generation utility using PDFKit
  * @module utils/pdfGenerator
  */
 
-const puppeteer = require('puppeteer');
+const PDFDocument = require('pdfkit');
 const { AppError } = require('../middleware/errorHandler');
-
-// PDF generation configuration
-const PDF_CONFIG = {
-  TIMEOUT: 30000, // 30 seconds
-  RETRY_COUNT: 1,
-  PAGE_FORMAT: 'Letter',
-  MARGINS: {
-    top: '0.5in',
-    bottom: '0.5in',
-    left: '0.5in',
-    right: '0.5in'
-  }
-};
-
-/**
- * Sleep utility
- * @param {number} ms - Milliseconds to sleep
- * @returns {Promise}
- */
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * PDF Generator class
@@ -48,15 +28,41 @@ class PDFGenerator {
       throw new AppError('Invalid resume data provided for PDF generation', 400);
     }
 
-    console.log('Generating PDF for resume');
+    console.log('Generating PDF for resume with PDFKit');
     console.log(`Score: ${resumeData.score}, Optimized for: ${resumeData.optimizedFor}`);
 
-    let browser = null;
-    
     try {
-      // Generate PDF with retry logic
-      const pdfBuffer = await this.generateWithRetry(resumeData, metadata);
-      return pdfBuffer;
+      const doc = new PDFDocument({
+        size: 'LETTER',
+        margins: {
+          top: 50,
+          bottom: 50,
+          left: 50,
+          right: 50
+        }
+      });
+
+      const buffers = [];
+      doc.on('data', buffers.push.bind(buffers));
+
+      // Add content to PDF
+      this.addContent(doc, resumeData, metadata);
+      
+      doc.end();
+
+      return new Promise((resolve, reject) => {
+        doc.on('end', () => {
+          try {
+            const pdfBuffer = Buffer.concat(buffers);
+            console.log('PDF generated successfully with PDFKit');
+            resolve(pdfBuffer);
+          } catch (error) {
+            reject(error);
+          }
+        });
+        
+        doc.on('error', reject);
+      });
     } catch (error) {
       console.error('PDF generation failed:', error);
       throw new AppError('Failed to generate PDF', 500, {
@@ -66,90 +72,12 @@ class PDFGenerator {
   }
 
   /**
-   * Generate PDF with retry logic
+   * Add content to PDF document
+   * @param {PDFDocument} doc - PDF document instance
    * @param {Object} resumeData - Resume data
    * @param {Object} metadata - Metadata
-   * @param {number} attempt - Current attempt number
-   * @returns {Promise<Buffer>} PDF buffer
    */
-  async generateWithRetry(resumeData, metadata, attempt = 1) {
-    let browser = null;
-    
-    try {
-      // Launch Puppeteer browser
-      browser = await puppeteer.launch({
-        headless: 'new',
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--disable-gpu'
-        ],
-        timeout: PDF_CONFIG.TIMEOUT
-      });
-
-      // Create new page
-      const page = await browser.newPage();
-      
-      // Set timeout
-      page.setDefaultTimeout(PDF_CONFIG.TIMEOUT);
-
-      // Generate HTML content
-      const htmlContent = this.generateHTML(resumeData, metadata);
-      
-      // Set content and wait for rendering
-      await page.setContent(htmlContent, {
-        waitUntil: ['networkidle0', 'domcontentloaded']
-      });
-
-      // Add custom CSS for print
-      await page.addStyleTag({
-        content: this.getPrintStyles()
-      });
-
-      // Generate PDF
-      const pdfBuffer = await page.pdf({
-        format: PDF_CONFIG.PAGE_FORMAT,
-        margin: PDF_CONFIG.MARGINS,
-        printBackground: true,
-        preferCSSPageSize: true
-      });
-
-      // Close browser
-      await browser.close();
-
-      console.log('PDF generated successfully');
-      return pdfBuffer;
-
-    } catch (error) {
-      // Clean up browser if it exists
-      if (browser) {
-        try {
-          await browser.close();
-        } catch (closeError) {
-          console.error('Error closing browser:', closeError);
-        }
-      }
-
-      // Retry logic
-      if (attempt <= PDF_CONFIG.RETRY_COUNT) {
-        console.log(`PDF generation failed, retrying... (attempt ${attempt + 1})`);
-        await sleep(1000);
-        return this.generateWithRetry(resumeData, metadata, attempt + 1);
-      }
-
-      throw error;
-    }
-  }
-
-  /**
-   * Generate HTML template for PDF
-   * @param {Object} resumeData - Resume data
-   * @param {Object} metadata - Metadata
-   * @returns {string} HTML content
-   */
-  generateHTML(resumeData, metadata) {
+  addContent(doc, resumeData, metadata) {
     const {
       text,
       score = 0,
@@ -159,313 +87,246 @@ class PDFGenerator {
     const {
       jobTitle = optimizedFor,
       company = '',
-      improvements = [],
-      changes = {}
+      improvements = []
     } = metadata;
 
-    // Format resume text for HTML
-    const formattedResume = this.formatResumeText(text, changes);
+    const pageWidth = doc.page.width - 100; // Account for margins
 
-    // Score badge color based on score
-    const scoreColor = this.getScoreColor(score);
+    // Header Section
+    this.addHeader(doc, score, jobTitle, company, pageWidth);
 
-    // Generation date
+    // Improvements Section (if any)
+    if (improvements.length > 0) {
+      this.addImprovements(doc, improvements);
+    }
+
+    // Resume Content
+    this.addResumeContent(doc, text);
+
+    // Footer
+    this.addFooter(doc);
+  }
+
+  /**
+   * Add header with title and score badge
+   * @param {PDFDocument} doc - PDF document
+   * @param {number} score - Match score
+   * @param {string} jobTitle - Job title
+   * @param {string} company - Company name
+   * @param {number} pageWidth - Available page width
+   */
+  addHeader(doc, score, jobTitle, company, pageWidth) {
+    // Title
+    doc.fontSize(24)
+       .fillColor('#2c3e50')
+       .font('Helvetica-Bold')
+       .text('Optimized Resume', 50, 50);
+
+    // Score badge (right aligned)
+    if (score > 0) {
+      const scoreText = `Score: ${score}/10`;
+      const scoreColor = this.getScoreColor(score);
+      const scoreWidth = doc.widthOfString(scoreText, { fontSize: 16 });
+      
+      doc.fontSize(16)
+         .fillColor(scoreColor)
+         .font('Helvetica-Bold')
+         .text(scoreText, pageWidth - scoreWidth + 50, 55);
+    }
+
+    // Optimized for subtitle
+    doc.moveDown(1);
+    const optimizedText = `Optimized for: ${jobTitle}${company ? ` at ${company}` : ''}`;
+    doc.fontSize(14)
+       .fillColor('#555555')
+       .font('Helvetica')
+       .text(optimizedText, 50);
+
+    // Separator line
+    doc.moveDown(0.5);
+    doc.strokeColor('#2c3e50')
+       .lineWidth(2)
+       .moveTo(50, doc.y)
+       .lineTo(pageWidth + 50, doc.y)
+       .stroke();
+
+    doc.moveDown(1);
+  }
+
+  /**
+   * Add improvements section
+   * @param {PDFDocument} doc - PDF document
+   * @param {Array} improvements - List of improvements
+   */
+  addImprovements(doc, improvements) {
+    // Section title
+    doc.fontSize(16)
+       .fillColor('#27ae60')
+       .font('Helvetica-Bold')
+       .text('Optimizations Applied', 50);
+
+    doc.moveDown(0.5);
+
+    // Add improvements as bullet points
+    improvements.slice(0, 5).forEach((improvement, index) => {
+      doc.fontSize(11)
+         .fillColor('#333333')
+         .font('Helvetica')
+         .text('✓', 60, doc.y, { continued: true })
+         .text(` ${improvement}`, 75);
+      
+      if (index < improvements.length - 1) {
+        doc.moveDown(0.3);
+      }
+    });
+
+    doc.moveDown(1);
+  }
+
+  /**
+   * Add resume content with proper formatting
+   * @param {PDFDocument} doc - PDF document
+   * @param {string} text - Resume text
+   */
+  addResumeContent(doc, text) {
+    // Parse and format resume sections
+    const sections = this.parseResumeSections(text);
+    
+    sections.forEach((section, index) => {
+      if (section.isHeader) {
+        // Section headers
+        doc.fontSize(14)
+           .fillColor('#2c3e50')
+           .font('Helvetica-Bold')
+           .text(section.content, 50);
+        doc.moveDown(0.5);
+      } else if (section.isSubHeader) {
+        // Sub headers (job titles, companies, etc.)
+        doc.fontSize(12)
+           .fillColor('#34495e')
+           .font('Helvetica-Bold')
+           .text(section.content, 50);
+        doc.moveDown(0.3);
+      } else {
+        // Regular content
+        doc.fontSize(11)
+           .fillColor('#333333')
+           .font('Helvetica')
+           .text(section.content, 50, doc.y, {
+             align: 'left',
+             width: doc.page.width - 100
+           });
+        doc.moveDown(0.4);
+      }
+
+      // Add page break if content is getting too long
+      if (doc.y > doc.page.height - 100) {
+        doc.addPage();
+      }
+    });
+  }
+
+  /**
+   * Parse resume text into sections
+   * @param {string} text - Resume text
+   * @returns {Array} Parsed sections
+   */
+  parseResumeSections(text) {
+    const lines = text.split('\n');
+    const sections = [];
+
+    lines.forEach(line => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+
+      // Detect section headers (all caps or common section names)
+      if (this.isSectionHeader(trimmed)) {
+        sections.push({ content: trimmed, isHeader: true });
+      }
+      // Detect sub-headers (job titles, company names)
+      else if (this.isSubHeader(trimmed)) {
+        sections.push({ content: trimmed, isSubHeader: true });
+      }
+      // Regular content
+      else {
+        sections.push({ content: trimmed, isHeader: false, isSubHeader: false });
+      }
+    });
+
+    return sections;
+  }
+
+  /**
+   * Check if line is a section header
+   * @param {string} line - Text line
+   * @returns {boolean} True if section header
+   */
+  isSectionHeader(line) {
+    const commonHeaders = [
+      'PROFESSIONAL SUMMARY', 'SUMMARY', 'OBJECTIVE',
+      'EXPERIENCE', 'WORK EXPERIENCE', 'PROFESSIONAL EXPERIENCE',
+      'EDUCATION', 'SKILLS', 'TECHNICAL SKILLS', 'CORE COMPETENCIES',
+      'CERTIFICATIONS', 'PROJECTS', 'ACHIEVEMENTS', 'AWARDS',
+      'LANGUAGES', 'INTERESTS', 'REFERENCES', 'CONTACT'
+    ];
+    
+    const upperLine = line.toUpperCase();
+    
+    // Check if it's all uppercase and longer than 3 chars
+    if (line === upperLine && line.length > 3) {
+      return true;
+    }
+    
+    // Check against common headers
+    return commonHeaders.some(header => upperLine.includes(header));
+  }
+
+  /**
+   * Check if line is a sub-header
+   * @param {string} line - Text line
+   * @returns {boolean} True if sub-header
+   */
+  isSubHeader(line) {
+    // Look for patterns like job titles or company names
+    // Usually have dates, company names, or are in title case
+    const hasDate = /\d{4}|\d{1,2}\/\d{4}|present|current/i.test(line);
+    const titleCase = /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*/.test(line);
+    const hasAtSymbol = line.includes(' at ') || line.includes(' @ ');
+    
+    return hasDate || (titleCase && line.length < 60) || hasAtSymbol;
+  }
+
+  /**
+   * Add footer to document
+   * @param {PDFDocument} doc - PDF document
+   */
+  addFooter(doc) {
+    const footerY = doc.page.height - 50;
     const generationDate = new Date().toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',
       day: 'numeric'
     });
 
-    return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Optimized Resume</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: 'Arial', 'Helvetica', sans-serif;
-      line-height: 1.6;
-      color: #333;
-      background: white;
-    }
-
-    .container {
-      max-width: 8.5in;
-      margin: 0 auto;
-      padding: 0.5in;
-      background: white;
-    }
-
-    .header {
-      border-bottom: 3px solid #2c3e50;
-      padding-bottom: 20px;
-      margin-bottom: 30px;
-    }
-
-    .score-badge {
-      display: inline-block;
-      background: ${scoreColor};
-      color: white;
-      padding: 8px 16px;
-      border-radius: 25px;
-      font-weight: bold;
-      font-size: 18px;
-      float: right;
-    }
-
-    .optimization-info {
-      margin-top: 10px;
-      color: #555;
-      font-size: 16px;
-    }
-
-    .optimization-info strong {
-      color: #2c3e50;
-    }
-
-    .improvements-section {
-      background: #f8f9fa;
-      border-left: 4px solid #27ae60;
-      padding: 15px;
-      margin: 20px 0;
-      border-radius: 0 4px 4px 0;
-    }
-
-    .improvements-section h3 {
-      color: #27ae60;
-      margin-bottom: 10px;
-      font-size: 16px;
-    }
-
-    .improvements-list {
-      list-style: none;
-      padding-left: 0;
-    }
-
-    .improvements-list li {
-      padding: 5px 0;
-      padding-left: 20px;
-      position: relative;
-    }
-
-    .improvements-list li:before {
-      content: "✓";
-      position: absolute;
-      left: 0;
-      color: #27ae60;
-      font-weight: bold;
-    }
-
-    .resume-content {
-      margin-top: 30px;
-      white-space: pre-wrap;
-      font-size: 12pt;
-      line-height: 1.8;
-    }
-
-    .highlighted {
-      background-color: #e8f5e9;
-      padding: 2px 4px;
-      border-radius: 3px;
-      transition: background-color 0.3s ease;
-    }
-
-    .footer {
-      margin-top: 50px;
-      padding-top: 20px;
-      border-top: 1px solid #ddd;
-      text-align: center;
-      color: #777;
-      font-size: 11px;
-    }
-
-    h1, h2, h3, h4, h5, h6 {
-      color: #2c3e50;
-      margin: 15px 0 10px 0;
-    }
-
-    /* Professional typography */
-    h1 { font-size: 24pt; font-weight: 600; }
-    h2 { font-size: 18pt; font-weight: 600; }
-    h3 { font-size: 14pt; font-weight: 600; }
-    h4 { font-size: 12pt; font-weight: 600; }
-
-    /* Section spacing */
-    .section {
-      margin-bottom: 25px;
-    }
-
-    /* List formatting */
-    ul, ol {
-      margin-left: 20px;
-      margin-bottom: 10px;
-    }
-
-    li {
-      margin-bottom: 5px;
-    }
-
-    /* Contact info styling */
-    .contact-info {
-      color: #555;
-      font-size: 11pt;
-      margin-bottom: 20px;
-    }
-
-    @media print {
-      body {
-        background: white;
-      }
-      
-      .container {
-        padding: 0;
-      }
-
-      .header {
-        page-break-after: avoid;
-      }
-
-      .section {
-        page-break-inside: avoid;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>Optimized Resume</h1>
-      <div class="score-badge">Score: ${score}/10</div>
-      <div style="clear: both;"></div>
-      <div class="optimization-info">
-        <strong>Optimized for:</strong> ${jobTitle}${company ? ` at ${company}` : ''}
-      </div>
-    </div>
-
-    ${improvements.length > 0 ? `
-    <div class="improvements-section">
-      <h3>Optimizations Applied</h3>
-      <ul class="improvements-list">
-        ${improvements.slice(0, 5).map(improvement => `
-          <li>${this.escapeHtml(improvement)}</li>
-        `).join('')}
-      </ul>
-    </div>
-    ` : ''}
-
-    <div class="resume-content">
-${formattedResume}
-    </div>
-
-    <div class="footer">
-      <p>Generated on ${generationDate} | Optimized with AI-powered Resume Enhancement</p>
-      <p>This resume has been tailored for the specific position mentioned above</p>
-    </div>
-  </div>
-</body>
-</html>`;
-  }
-
-  /**
-   * Format resume text with highlighting
-   * @param {string} text - Resume text
-   * @param {Object} changes - Changes made during optimization
-   * @returns {string} Formatted HTML text
-   */
-  formatResumeText(text, changes) {
-    // Escape HTML first
-    let formatted = this.escapeHtml(text);
-
-    // Apply basic formatting
-    // Convert multiple newlines to paragraph breaks
-    formatted = formatted.replace(/\n\n+/g, '</p><p>');
-    formatted = `<p>${formatted}</p>`;
-
-    // Highlight keywords if available
-    if (changes.keywordsIntegrated && Array.isArray(changes.keywordsIntegrated)) {
-      changes.keywordsIntegrated.forEach(keyword => {
-        // Case-insensitive highlighting
-        const regex = new RegExp(`\\b(${this.escapeRegex(keyword)})\\b`, 'gi');
-        formatted = formatted.replace(regex, '<span class="highlighted">$1</span>');
-      });
-    }
-
-    return formatted;
-  }
-
-  /**
-   * Get additional print styles
-   * @returns {string} CSS styles
-   */
-  getPrintStyles() {
-    return `
-      @page {
-        size: letter;
-        margin: 0.5in;
-      }
-
-      @media print {
-        .score-badge {
-          -webkit-print-color-adjust: exact;
-          print-color-adjust: exact;
-        }
-
-        .highlighted {
-          -webkit-print-color-adjust: exact;
-          print-color-adjust: exact;
-        }
-
-        .improvements-section {
-          -webkit-print-color-adjust: exact;
-          print-color-adjust: exact;
-        }
-      }
-    `;
+    doc.fontSize(9)
+       .fillColor('#777777')
+       .font('Helvetica')
+       .text(`Generated on ${generationDate} | AI-Enhanced Resume`, 50, footerY, {
+         align: 'center',
+         width: doc.page.width - 100
+       });
   }
 
   /**
    * Get color for score badge
    * @param {number} score - Score value
-   * @returns {string} Hex color
+   * @returns {string} Color value
    */
   getScoreColor(score) {
     if (score >= 8) return '#27ae60'; // Green
     if (score >= 6) return '#3498db'; // Blue
     if (score >= 4) return '#f39c12'; // Orange
     return '#e74c3c'; // Red
-  }
-
-  /**
-   * Escape HTML special characters
-   * @param {string} text - Text to escape
-   * @returns {string} Escaped text
-   */
-  escapeHtml(text) {
-    const map = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;'
-    };
-    return text.replace(/[&<>"']/g, char => map[char]);
-  }
-
-  /**
-   * Escape regex special characters
-   * @param {string} text - Text to escape
-   * @returns {string} Escaped text
-   */
-  escapeRegex(text) {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   /**
