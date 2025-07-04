@@ -4,6 +4,7 @@
  */
 
 const router = require('express').Router();
+const { body } = require('express-validator');
 const jobSearchService = require('../services/jobSearch.service');
 const aiMatchingService = require('../services/aiMatching.service');
 const cache = require('../utils/cache');
