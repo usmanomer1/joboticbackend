@@ -39,7 +39,7 @@ const initializeClient = () => {
  * @param {string} modelName - Model name (default: 'gemini-pro')
  * @returns {Object} Model instance
  */
-const getModel = (modelName = 'gemini-pro') => {
+const getModel = (modelName = 'gemini-1.5-flash') => {
   if (!model) {
     if (!genAI) {
       initializeClient();
@@ -108,15 +108,27 @@ const generateContent = async (prompt, options = {}) => {
     
     return text;
   } catch (error) {
-    console.error('Gemini content generation error:', error);
+    console.error('Gemini content generation error:', {
+      message: error.message,
+      status: error.status,
+      code: error.code,
+      details: error.details,
+      stack: error.stack?.substring(0, 500)
+    });
     
     // Handle specific Gemini errors
     if (error.message?.includes('API key')) {
       throw new AppError('Invalid AI API key', 401);
     } else if (error.message?.includes('quota')) {
       throw new AppError('AI service quota exceeded', 429);
-    } else if (error.message?.includes('safety')) {
+    } else if (error.message?.includes('safety') || error.message?.includes('SAFETY')) {
       throw new AppError('Content filtered by safety settings', 400);
+    } else if (error.message?.includes('RECITATION')) {
+      throw new AppError('Content blocked due to recitation concerns', 400);
+    } else if (error.status === 429) {
+      throw new AppError('Rate limit exceeded - too many requests', 429);
+    } else if (error.status === 400) {
+      throw new AppError(`Invalid request: ${error.message}`, 400);
     }
     
     // Re-throw AppErrors
@@ -124,9 +136,11 @@ const generateContent = async (prompt, options = {}) => {
       throw error;
     }
     
-    // Generic error
+    // Generic error with more details
     throw new AppError('Failed to generate content', 500, {
-      originalError: error.message
+      originalError: error.message,
+      status: error.status,
+      code: error.code
     });
   }
 };
