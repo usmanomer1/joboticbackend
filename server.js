@@ -111,98 +111,110 @@ async function validateStartup() {
 }
 
 /**
- * Server Instance
+ * For Vercel serverless deployment
  */
-let server;
+if (process.env.VERCEL) {
+  // In Vercel environment, just run validation
+  validateStartup().catch(error => {
+    console.error('❌ Startup validation failed:', error);
+  });
+} else {
+  // Local development or traditional hosting
+  /**
+   * Server Instance
+   */
+  let server;
 
-/**
- * Start Server
- */
-async function startServer() {
-  try {
-    // Run startup validation
-    await validateStartup();
-    
-    // Start server
-    const PORT = process.env.PORT || 3001;
-    server = app.listen(PORT, () => {
-      console.log(`🚀 Server is running on port ${PORT}`);
-      console.log(`📍 API endpoints available at http://localhost:${PORT}/api`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`🔧 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
+  /**
+   * Start Server
+   */
+  async function startServer() {
+    try {
+      // Run startup validation
+      await validateStartup();
       
-      if (process.env.NODE_ENV === 'production') {
-        console.log('🔒 Running in PRODUCTION mode');
-      } else {
-        console.log('🛠️  Running in DEVELOPMENT mode');
-      }
-    });
-    
-    // Handle server errors
-    server.on('error', (error) => {
-      if (error.code === 'EADDRINUSE') {
-        console.error(`❌ Port ${PORT} is already in use`);
-        process.exit(1);
-      } else {
-        console.error('❌ Server error:', error);
-        process.exit(1);
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Failed to start server:', error);
-    process.exit(1);
-  }
-}
-
-/**
- * Graceful Shutdown
- */
-function gracefulShutdown(signal) {
-  console.log(`\n${signal} received. Starting graceful shutdown...`);
-  
-  // Stop accepting new connections
-  if (server) {
-    server.close(() => {
-      console.log('✅ HTTP server closed');
+      // Start server
+      const PORT = process.env.PORT || 3001;
+      server = app.listen(PORT, () => {
+        console.log(`🚀 Server is running on port ${PORT}`);
+        console.log(`📍 API endpoints available at http://localhost:${PORT}/api`);
+        console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+        console.log(`🔧 Frontend URL: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
+        
+        if (process.env.NODE_ENV === 'production') {
+          console.log('🔒 Running in PRODUCTION mode');
+        } else {
+          console.log('🛠️  Running in DEVELOPMENT mode');
+        }
+      });
       
-      // Stop cleanup jobs
-      if (documentGenerationService && documentGenerationService.stopCleanupJob) {
-        documentGenerationService.stopCleanupJob();
-        console.log('✅ Cleanup jobs stopped');
-      }
+      // Handle server errors
+      server.on('error', (error) => {
+        if (error.code === 'EADDRINUSE') {
+          console.error(`❌ Port ${PORT} is already in use`);
+          process.exit(1);
+        } else {
+          console.error('❌ Server error:', error);
+          process.exit(1);
+        }
+      });
       
-      // Exit process
-      console.log('👋 Goodbye!');
-      process.exit(0);
-    });
-    
-    // Force shutdown after 10 seconds
-    setTimeout(() => {
-      console.error('❌ Forced shutdown after timeout');
+    } catch (error) {
+      console.error('❌ Failed to start server:', error);
       process.exit(1);
-    }, 10000);
-  } else {
-    process.exit(0);
+    }
   }
+
+  /**
+   * Graceful Shutdown
+   */
+  function gracefulShutdown(signal) {
+    console.log(`\n${signal} received. Starting graceful shutdown...`);
+    
+    // Stop accepting new connections
+    if (server) {
+      server.close(() => {
+        console.log('✅ HTTP server closed');
+        
+        // Stop cleanup jobs
+        if (documentGenerationService && documentGenerationService.stopCleanupJob) {
+          documentGenerationService.stopCleanupJob();
+          console.log('✅ Cleanup jobs stopped');
+        }
+        
+        // Exit process
+        console.log('👋 Goodbye!');
+        process.exit(0);
+      });
+      
+      // Force shutdown after 10 seconds
+      setTimeout(() => {
+        console.error('❌ Forced shutdown after timeout');
+        process.exit(1);
+      }, 10000);
+    } else {
+      process.exit(0);
+    }
+  }
+
+  // Handle shutdown signals
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  // Handle uncaught errors
+  process.on('uncaughtException', (error) => {
+    console.error('❌ Uncaught Exception:', error);
+    gracefulShutdown('UNCAUGHT_EXCEPTION');
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    gracefulShutdown('UNHANDLED_REJECTION');
+  });
+
+  // Start the server
+  startServer();
 }
 
-// Handle shutdown signals
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-// Handle uncaught errors
-process.on('uncaughtException', (error) => {
-  console.error('❌ Uncaught Exception:', error);
-  gracefulShutdown('UNCAUGHT_EXCEPTION');
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-  gracefulShutdown('UNHANDLED_REJECTION');
-});
-
-// Start the server
-startServer();
-
+// Export for Vercel serverless
 module.exports = app;
