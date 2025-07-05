@@ -189,7 +189,7 @@ class AIMatchingService {
       id: job.job_id,
       title: job.job_title,
       company: job.employer_name,
-      description: this.truncateText(job.job_description || '', 500),
+      description: this.truncateText(job.job_description_clean || job.job_description || '', 500),
       requirements: {
         skills: job.job_required_skills || [],
         experience: job.job_required_experience || {},
