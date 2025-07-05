@@ -7,10 +7,12 @@ const router = require('express').Router();
 const resumeAnalysisService = require('../services/resumeAnalysis.service');
 const resumeOptimizationService = require('../services/resumeOptimization.service');
 const jobSearchService = require('../services/jobSearch.service');
+const documentGenerationService = require('../services/documentGeneration.service');
 const { validate, validators } = require('../middleware/validation');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
-const { aiLimiter } = require('../middleware/rateLimiter');
-const { body } = require('express-validator');
+const { aiLimiter, generalLimiter } = require('../middleware/rateLimiter');
+const { body, param } = require('express-validator');
+const cache = require('../utils/cache');
 
 /**
  * Custom validators for resume routes
@@ -99,6 +101,49 @@ const resumeValidators = {
     body('options.quickEdit')
       .optional()
       .isBoolean().withMessage('Quick edit must be a boolean')
+  ],
+
+  /**
+   * Validates resume download request
+   */
+  resumeDownload: [
+    body('resumeText')
+      .trim()
+      .notEmpty().withMessage('Resume text is required')
+      .isLength({ min: 100 }).withMessage('Resume must be at least 100 characters')
+      .isLength({ max: 50000 }).withMessage('Resume must not exceed 50000 characters'),
+    
+    body('format')
+      .trim()
+      .notEmpty().withMessage('Format is required')
+      .isIn(['pdf', 'docx', 'PDF', 'DOCX']).withMessage('Format must be either pdf or docx')
+      .customSanitizer(value => value.toLowerCase()),
+    
+    body('metadata')
+      .optional()
+      .isObject().withMessage('Metadata must be an object'),
+    
+    body('metadata.score')
+      .optional()
+      .isFloat({ min: 0, max: 10 }).withMessage('Score must be between 0 and 10'),
+    
+    body('metadata.jobTitle')
+      .optional()
+      .trim()
+      .isLength({ max: 200 }).withMessage('Job title must not exceed 200 characters'),
+    
+    body('metadata.company')
+      .optional()
+      .trim()
+      .isLength({ max: 200 }).withMessage('Company name must not exceed 200 characters'),
+    
+    body('metadata.improvements')
+      .optional()
+      .isArray().withMessage('Improvements must be an array'),
+    
+    body('metadata.changes')
+      .optional()
+      .isObject().withMessage('Changes must be an object')
   ]
 };
 
@@ -391,5 +436,291 @@ router.post('/compare',
     }
   })
 );
+
+/**
+ * @route   POST /api/resume/download
+ * @desc    Generate and download resume document (PDF or DOCX)
+ * @access  Public (rate limited)
+ * @body    {
+ *   resumeText: string (required),
+ *   format: 'pdf' | 'docx' (required),
+ *   metadata: {
+ *     score: number,
+ *     jobTitle: string,
+ *     company: string,
+ *     improvements: string[],
+ *     changes: object
+ *   }
+ * }
+ */
+router.post('/download',
+  aiLimiter, // Apply AI rate limiter since this uses resources
+  validate(resumeValidators.resumeDownload),
+  asyncHandler(async (req, res) => {
+    const { resumeText, format, metadata = {} } = req.body;
+    
+    console.log(`Resume document generation requested: ${format.toUpperCase()}`);
+    console.log('Metadata:', metadata);
+    
+    try {
+      // Prepare enhanced data for ATS-optimized document generation
+      const documentData = {
+        resumeText,
+        score: metadata.score,
+        jobTitle: metadata.jobTitle,
+        company: metadata.company,
+        improvements: metadata.improvements || [],
+        changes: metadata.changes || {},
+        // Add preview data for frontend highlighting
+        previewData: {
+          highlightedSections: metadata.changes ? generateHighlightData(metadata.changes) : [],
+          originalText: resumeText,
+          optimizedText: resumeText // This would be the optimized version in a real scenario
+        }
+      };
+      
+      // Generate ATS-optimized document
+      const fileInfo = await documentGenerationService.generateResume(documentData, format);
+      
+      // Cache preview data for the frontend
+      const previewData = {
+        changes: documentData.changes,
+        improvements: documentData.improvements,
+        score: documentData.score,
+        highlightedSections: documentData.previewData.highlightedSections
+      };
+      cache.set(`preview:${fileInfo.fileId}`, previewData, fileInfo.expiresIn);
+      
+      // Return download information with preview data
+      res.json({
+        success: true,
+        data: {
+          fileId: fileInfo.fileId,
+          filename: fileInfo.filename,
+          format: fileInfo.format,
+          size: fileInfo.size,
+          downloadUrl: fileInfo.downloadUrl,
+          expiresIn: fileInfo.expiresIn,
+          expiresAt: fileInfo.expiresAt,
+          // Add preview URL for frontend rendering
+          previewUrl: `/api/resume/preview/${fileInfo.fileId}`,
+          // Add highlighted changes for frontend
+          preview: {
+            changes: documentData.changes,
+            improvements: documentData.improvements,
+            score: documentData.score,
+            highlightedSections: documentData.previewData.highlightedSections
+          }
+        },
+        message: `${format.toUpperCase()} document generated successfully with ATS optimization`
+      });
+    } catch (error) {
+      console.error('Resume document generation error:', error);
+      throw error;
+    }
+  })
+);
+
+/**
+ * @route   GET /api/resume/preview/:fileId
+ * @desc    Get resume preview with highlighted changes for frontend rendering
+ * @access  Public
+ * @params  fileId: UUID of the generated file
+ */
+router.get('/preview/:fileId',
+  generalLimiter,
+  validate([
+    param('fileId')
+      .trim()
+      .notEmpty().withMessage('File ID is required')
+      .isUUID().withMessage('Invalid file ID format')
+  ]),
+  asyncHandler(async (req, res) => {
+    const { fileId } = req.params;
+    
+    console.log(`Resume preview requested: ${fileId}`);
+    
+    try {
+      // Get file info from document generation service
+      const fileInfo = await documentGenerationService.getFileInfo(fileId);
+      
+      // Check if file has expired
+      if (Date.now() > fileInfo.expiresAt) {
+        throw new AppError('Preview has expired', 410);
+      }
+      
+      // Get cached preview data (this would be stored during generation)
+      const previewData = cache.get(`preview:${fileId}`) || {
+        changes: {},
+        improvements: [],
+        score: 0,
+        highlightedSections: []
+      };
+      
+      // Return enhanced preview data for frontend rendering
+      res.json({
+        success: true,
+        data: {
+          fileId,
+          filename: fileInfo.filename,
+          format: fileInfo.format,
+          downloadUrl: `/api/download/${fileId}`,
+          expiresAt: new Date(fileInfo.expiresAt).toISOString(),
+          preview: {
+            // Highlighted sections for frontend to render with green highlights
+            highlightedSections: previewData.highlightedSections || [],
+            // Summary of changes made
+            changesSummary: {
+              sectionsImproved: Object.keys(previewData.changes || {}).length,
+              keywordsAdded: extractAddedKeywords(previewData.changes || {}),
+              skillsAdded: extractAddedSkills(previewData.changes || {}),
+              improvementsCount: (previewData.improvements || []).length
+            },
+            // Detailed changes for highlighting
+            changes: previewData.changes || {},
+            improvements: previewData.improvements || [],
+            score: previewData.score || 0,
+            // For frontend highlighting - specific text sections that were changed
+            textHighlights: generateTextHighlights(previewData.changes || {})
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Resume preview error:', error);
+      
+      if (error.status === 404 || error.status === 410) {
+        throw error;
+      }
+      
+      throw new AppError('Failed to generate preview', 500);
+    }
+  })
+);
+
+/**
+ * Helper function to extract added keywords from changes
+ */
+function extractAddedKeywords(changes) {
+  const keywords = [];
+  
+  if (changes.summary && changes.summary.keywordsAdded) {
+    keywords.push(...changes.summary.keywordsAdded);
+  }
+  
+  if (changes.experience && Array.isArray(changes.experience)) {
+    changes.experience.forEach(exp => {
+      if (exp.keywordsAdded) {
+        keywords.push(...exp.keywordsAdded);
+      }
+    });
+  }
+  
+  return [...new Set(keywords)];
+}
+
+/**
+ * Helper function to extract added skills from changes
+ */
+function extractAddedSkills(changes) {
+  if (changes.skills && changes.skills.added) {
+    return changes.skills.added;
+  }
+  return [];
+}
+
+/**
+ * Helper function to generate text highlights for frontend
+ */
+function generateTextHighlights(changes) {
+  const highlights = [];
+  
+  // Summary highlights
+  if (changes.summary) {
+    highlights.push({
+      section: 'summary',
+      type: 'improvement',
+      originalText: changes.summary.before || '',
+      highlightedText: changes.summary.after || '',
+      keywords: changes.summary.keywordsAdded || [],
+      color: 'green'
+    });
+  }
+  
+  // Skills highlights
+  if (changes.skills) {
+    if (changes.skills.added && changes.skills.added.length > 0) {
+      highlights.push({
+        section: 'skills',
+        type: 'addition',
+        addedItems: changes.skills.added,
+        removedItems: changes.skills.removed || [],
+        color: 'green'
+      });
+    }
+  }
+  
+  // Experience highlights
+  if (changes.experience && Array.isArray(changes.experience)) {
+    changes.experience.forEach((exp, index) => {
+      highlights.push({
+        section: 'experience',
+        subsection: index,
+        type: 'enhancement',
+        position: exp.position || `Position ${index + 1}`,
+        originalText: exp.before || '',
+        highlightedText: exp.after || '',
+        improvementType: exp.improvementType || 'general',
+        color: 'green'
+      });
+    });
+  }
+  
+  return highlights;
+}
+
+/**
+ * Helper function to generate highlight data for frontend
+ * @param {Object} changes - Changes object from optimization
+ * @returns {Array} Array of highlight information
+ */
+function generateHighlightData(changes) {
+  const highlights = [];
+  
+  if (changes.summary) {
+    highlights.push({
+      section: 'summary',
+      type: 'improvement',
+      before: changes.summary.before,
+      after: changes.summary.after,
+      keywords: changes.summary.keywordsAdded || []
+    });
+  }
+  
+  if (changes.skills) {
+    highlights.push({
+      section: 'skills',
+      type: 'addition',
+      added: changes.skills.added || [],
+      removed: changes.skills.removed || [],
+      reorganized: changes.skills.reorganized
+    });
+  }
+  
+  if (changes.experience && Array.isArray(changes.experience)) {
+    changes.experience.forEach((exp, index) => {
+      highlights.push({
+        section: 'experience',
+        subsection: index,
+        type: 'enhancement',
+        position: exp.position,
+        before: exp.before,
+        after: exp.after,
+        improvementType: exp.improvementType
+      });
+    });
+  }
+  
+  return highlights;
+}
 
 module.exports = router;

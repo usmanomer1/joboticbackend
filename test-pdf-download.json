@@ -1,0 +1,13 @@
+{
+  "resumeText": "John Doe\nSenior Software Engineer\n\nEXPERIENCE\nSenior Developer (2020-2023)\n- Built scalable applications\n\nSKILLS\nJavaScript, React, Node.js",
+  "format": "pdf",
+  "metadata": {
+    "score": 8.5,
+    "jobTitle": "Senior Software Engineer",
+    "company": "Tech Corp",
+    "improvements": [
+      "Added quantified achievements",
+      "Emphasized leadership experience"
+    ]
+  }
+}

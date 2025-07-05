@@ -94,30 +94,53 @@ class ResumeAnalysisService {
    */
   async performAnalysis(resumeText, jobData, retries = ANALYSIS_CONFIG.MAX_RETRIES) {
     try {
+      console.log('Starting resume analysis...', {
+        resumeLength: resumeText.length,
+        jobTitle: jobData.job_title,
+        employer: jobData.employer_name
+      });
+
       // Extract skills and requirements from job
       const jobRequirements = this.extractJobRequirements(jobData);
+      console.log('Extracted job requirements:', jobRequirements);
       
       // Prepare analysis prompt
       const prompt = this.prepareAnalysisPrompt(resumeText, jobData, jobRequirements);
+      console.log('Analysis prompt prepared, length:', prompt.length);
       
       // Get AI analysis
+      console.log('Calling Gemini API for analysis...');
       const response = await geminiClient.generateJSON(prompt, {
         temperature: 0.3, // Low temperature for consistent analysis
         maxOutputTokens: 4096 // Increased for complex analysis output
       });
       
+      console.log('Gemini response received:', typeof response);
+      
       // Validate and normalize response
       const validatedAnalysis = this.validateAnalysisResponse(response);
+      console.log('Analysis validated successfully');
       
       return validatedAnalysis;
     } catch (error) {
-      console.error(`Analysis error (${retries} retries left):`, error.message);
+      console.error(`Analysis error (${retries} retries left):`, {
+        message: error.message,
+        stack: error.stack?.split('\n').slice(0, 5).join('\n'),
+        isVercel: !!process.env.VERCEL
+      });
       
-      if (retries > 0 && !error.message.includes('safety')) {
+      if (retries > 0 && !error.message.includes('safety') && !error.message.includes('SAFETY')) {
         // Exponential backoff
         const delay = ANALYSIS_CONFIG.RETRY_DELAY * Math.pow(2, ANALYSIS_CONFIG.MAX_RETRIES - retries);
+        console.log(`Retrying in ${delay}ms...`);
         await sleep(delay);
         return this.performAnalysis(resumeText, jobData, retries - 1);
+      }
+      
+      // Provide fallback response for better user experience
+      if (error.message.includes('safety') || error.message.includes('SAFETY')) {
+        console.log('Safety filter triggered, providing fallback analysis');
+        return this.getFallbackAnalysis(jobData);
       }
       
       throw error;
@@ -631,6 +654,60 @@ IMPORTANT:
       experience: 'Add quantifiable achievements',
       skills: 'Update skills section',
       keywords: 'Add relevant keywords'
+    };
+  }
+
+  /**
+   * Provide fallback analysis when AI fails
+   * @param {Object} jobData - Job information
+   * @returns {Object} Fallback analysis
+   */
+  getFallbackAnalysis(jobData) {
+    console.log('Generating fallback analysis for:', jobData.job_title);
+    
+    return {
+      currentScore: 5.0,
+      maxPossibleScore: 10,
+      scoreBreakdown: {
+        skills: { 
+          score: 2, 
+          max: 4, 
+          missing: ["Check job requirements"],
+          present: ["Professional experience"]
+        },
+        experience: { 
+          score: 2, 
+          max: 3, 
+          gaps: ["Review job requirements"],
+          strengths: ["Work history"]
+        },
+        keywords: { 
+          score: 1, 
+          max: 3, 
+          missing: ["Job-specific terms"],
+          present: ["Basic terminology"]
+        }
+      },
+      criticalMissing: {
+        skills: ["Review job posting for specific skills"],
+        experience: ["Match experience to job requirements"],
+        keywords: ["Include industry terminology"]
+      },
+      recommendations: [
+        "Carefully review the job posting for specific requirements",
+        "Tailor your resume to match the job description",
+        "Include relevant keywords from the job posting",
+        "Quantify your achievements with specific numbers",
+        "Highlight skills that match the job requirements"
+      ],
+      improvements: {
+        summary: "Review and customize for this specific role",
+        experience: "Add quantifiable achievements and relevant projects",
+        skills: "Include skills mentioned in the job posting",
+        keywords: "Use terminology from the job description"
+      },
+      overallFeedback: "Due to AI service limitations, this is a generic analysis. Please manually review the job posting and tailor your resume accordingly.",
+      analysisNote: "Fallback analysis - AI service temporarily unavailable"
     };
   }
 }

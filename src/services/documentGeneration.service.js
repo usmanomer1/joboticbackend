@@ -7,12 +7,14 @@ const fs = require('fs').promises;
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const pdfGenerator = require('../utils/pdfGenerator');
+const atsOptimizedPdfGenerator = require('../utils/atsOptimizedPdfGenerator');
+const atsOptimizedDocxGenerator = require('../utils/atsOptimizedDocxGenerator');
 const { AppError } = require('../middleware/errorHandler');
 const cache = require('../utils/cache');
 
 // Document generation configuration
 const DOC_CONFIG = {
-  TEMP_DIR: path.join(process.cwd(), 'temp', 'documents'),
+  TEMP_DIR: process.env.VERCEL ? '/tmp' : path.join(process.cwd(), 'temp', 'documents'),
   FILE_TTL: 3600000, // 1 hour in milliseconds
   CLEANUP_INTERVAL: 900000, // 15 minutes
   MAX_FILE_SIZE: 10485760, // 10MB
@@ -27,8 +29,10 @@ class DocumentGenerationService {
     // Ensure temp directory exists
     this.initializeTempDirectory();
     
-    // Start cleanup job
-    this.startCleanupJob();
+    // Start cleanup job (only in non-serverless environments)
+    if (!process.env.VERCEL) {
+      this.startCleanupJob();
+    }
   }
 
   /**
@@ -36,10 +40,14 @@ class DocumentGenerationService {
    */
   async initializeTempDirectory() {
     try {
-      await fs.mkdir(DOC_CONFIG.TEMP_DIR, { recursive: true });
-      console.log('Temporary directory initialized:', DOC_CONFIG.TEMP_DIR);
+      if (!process.env.VERCEL) {
+        // Only create directory in non-serverless environments
+        await fs.mkdir(DOC_CONFIG.TEMP_DIR, { recursive: true });
+      }
+      console.log('Temporary directory ready:', DOC_CONFIG.TEMP_DIR);
     } catch (error) {
-      console.error('Failed to create temp directory:', error);
+      console.error('Failed to initialize temp directory:', error);
+      // In Vercel, /tmp always exists, so this shouldn't fail
     }
   }
 
@@ -70,11 +78,11 @@ class DocumentGenerationService {
     try {
       let buffer;
       
-      // Generate document based on format
+      // Generate document based on format using ATS-optimized generators
       if (format.toLowerCase() === 'pdf') {
-        buffer = await this.generatePDF(data);
+        buffer = await this.generateATSOptimizedPDF(data);
       } else if (format.toLowerCase() === 'docx') {
-        buffer = await this.generateDOCX(data);
+        buffer = await this.generateATSOptimizedDOCX(data);
       }
 
       // Create filename
@@ -85,16 +93,69 @@ class DocumentGenerationService {
 
       return fileInfo;
     } catch (error) {
-      console.error('Document generation error:', error);
+      console.error('Document generation error:', {
+        message: error.message,
+        stack: error.stack,
+        format,
+        tempDir: DOC_CONFIG.TEMP_DIR,
+        isVercel: !!process.env.VERCEL
+      });
       throw new AppError('Failed to generate document', 500, {
         originalError: error.message,
-        format
+        format,
+        environment: process.env.VERCEL ? 'vercel' : 'local'
       });
     }
   }
 
   /**
-   * Generate PDF document
+   * Generate ATS-optimized PDF document
+   * @param {Object} data - Resume data
+   * @returns {Promise<Buffer>} PDF buffer
+   */
+  async generateATSOptimizedPDF(data) {
+    const resumeData = {
+      text: data.resumeText,
+      score: data.score || 0,
+      optimizedFor: data.jobTitle || 'General Position'
+    };
+
+    const metadata = {
+      jobTitle: data.jobTitle,
+      company: data.company,
+      improvements: data.improvements || [],
+      changes: data.changes || {}
+    };
+
+    console.log('Generating ATS-optimized PDF with enhanced formatting and professional styling');
+    return await atsOptimizedPdfGenerator.generatePDF(resumeData, metadata);
+  }
+
+  /**
+   * Generate ATS-optimized DOCX document  
+   * @param {Object} data - Resume data
+   * @returns {Promise<Buffer>} DOCX buffer
+   */
+  async generateATSOptimizedDOCX(data) {
+    const resumeData = {
+      text: data.resumeText,
+      score: data.score || 0,
+      optimizedFor: data.jobTitle || 'General Position'
+    };
+
+    const metadata = {
+      jobTitle: data.jobTitle,
+      company: data.company,
+      improvements: data.improvements || [],
+      changes: data.changes || {}
+    };
+
+    console.log('Generating ATS-optimized DOCX with professional styling and structure');
+    return await atsOptimizedDocxGenerator.generateDOCX(resumeData, metadata);
+  }
+
+  /**
+   * Generate PDF document (legacy method)
    * @param {Object} data - Resume data
    * @returns {Promise<Buffer>} PDF buffer
    */

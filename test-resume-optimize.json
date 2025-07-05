@@ -1,0 +1,9 @@
+{
+  "resumeText": "John Doe\nSoftware Engineer\n\nEXPERIENCE\nSenior Developer at TechCorp (2020-2023)\n- Built web applications\n- Led team\n\nSKILLS\nJavaScript, Python, React",
+  "jobData": {
+    "job_title": "Senior Software Engineer",
+    "job_description": "We need a Senior Software Engineer with React, Node.js, and AWS experience.",
+    "employer_name": "Tech Corp",
+    "job_required_skills": ["React", "Node.js", "AWS", "JavaScript"]
+  }
+}
