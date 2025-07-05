@@ -2,6 +2,31 @@
 
 AI-powered job matching platform backend that helps job seekers find perfect matches and optimize their resumes for specific positions.
 
+## 🎯 **For Frontend Engineer - Quick Start**
+
+### **Production API Details**
+- **API Base URL**: `https://jobotic-backend.vercel.app` (replace with actual Vercel URL)
+- **API Key**: `9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c`
+- **Authentication**: Include `X-API-Key` header in all requests
+- **Frontend Domain**: `https://portal.jobotic.ai`
+
+### **Required Headers for All API Calls**
+```javascript
+{
+  'Content-Type': 'application/json',
+  'X-API-Key': '9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c'
+}
+```
+
+### **Main Endpoints**
+- `POST /api/jobs/match` - Search jobs with AI matching
+- `POST /api/jobs/search` - Basic job search
+- `POST /api/resume/analyze` - Analyze resume vs job
+- `POST /api/resume/optimize` - Optimize resume for job
+- `POST /api/resume/download` - Generate PDF/DOCX
+
+---
+
 ## 🚀 Features
 
 - **Job Search & Aggregation**: Search jobs from 20+ job boards via JSearch API
@@ -10,6 +35,16 @@ AI-powered job matching platform backend that helps job seekers find perfect mat
 - **Resume Optimization**: AI-driven resume improvements for specific jobs
 - **Document Generation**: Export optimized resumes as PDF or DOCX
 - **Smart Caching**: Efficient caching to reduce API calls and improve performance
+
+## 🔄 Data Flow
+1. Client sends resume + search preferences (job title, location, filters)
+2. Backend constructs search query and calls JSearch API (with caching)
+3. Enriches results with salary data when available
+4. AI service scores each job against resume (in batches of 10)
+5. Results sorted by match score with match reasons
+6. Client can request resume optimization for specific job
+7. Optimized resume generated with tracked changes
+8. PDF/DOCX created with optimization metadata
 
 ## 📋 Prerequisites
 
@@ -45,6 +80,8 @@ PORT=3001
 FRONTEND_URL=http://localhost:3000
 NODE_ENV=development
 CACHE_TTL=7200
+# Production API key for authentication (generate a secure random string)
+API_KEY=your_production_api_key_here
 ```
 
 **⚠️ IMPORTANT: Never commit the `.env` file!** It contains sensitive API keys and should remain local to your machine.
@@ -72,7 +109,8 @@ http://localhost:3001/api
 ```
 
 ### Authentication
-Currently, the API does not require authentication. In production, add API key authentication.
+- **Development**: No authentication required
+- **Production**: Requires API key authentication via `X-API-Key` header
 
 ### Rate Limiting
 - General endpoints: 100 requests per 15 minutes per IP
@@ -81,6 +119,12 @@ Currently, the API does not require authentication. In production, add API key a
 ---
 
 ## 🔍 API Endpoints
+
+### Jobs
+- POST /api/jobs/match - Search jobs and get AI match scores
+- POST /api/jobs/search - Basic job search without matching
+- GET /api/jobs/:jobId - Get detailed job information
+- POST /api/jobs/salary-estimate - Get salary estimate for a position
 
 ### 1. Health Check
 
@@ -702,6 +746,54 @@ Create a Postman environment with:
 - [Google Gemini AI Documentation](https://ai.google.dev/docs)
 - [Express.js Documentation](https://expressjs.com/)
 
+## 🔌 JSearch API Endpoints Used
+- **Search Jobs**: GET /search - Search across 20+ job boards
+  - Parameters: query, page, num_pages, date_posted, remote_jobs_only, employment_types, job_requirements
+- **Job Details**: GET /job-details - Get complete job information
+  - Parameters: job_id, country
+- **Salary Estimate**: GET /estimated-salary - Get salary data
+  - Parameters: job_title, location, location_type
+- **Company Salary**: GET /company-job-salary - Get company-specific salary data
+  - Parameters: company, job_title, location_type
+
+## 📋 API Request/Response Examples
+
+### Job Search Request
+POST /api/jobs/search
+```json
+{
+  "query": "software engineer Chicago", // OR use jobTitle + location
+  "jobTitle": "software engineer",
+  "location": "Chicago, IL",
+  "datePosted": "week",
+  "remote": false,
+  "employmentTypes": ["FULLTIME"],
+  "page": 1
+}
+```
+
+### Job Match Response
+```json
+{
+  "success": true,
+  "data": {
+    "jobs": [{
+      "job_id": "xyz123",
+      "employer_name": "Tech Corp",
+      "job_title": "Senior Software Engineer",
+      "job_apply_link": "https://...",
+      "match_score": 85,
+      "match_label": "STRONG MATCH",
+      "match_reasons": ["5+ years experience matches", "Python skills align"],
+      "missing_skills": ["Kubernetes", "AWS"],
+      // ... other JSearch fields
+    }],
+    "totalFound": 45,
+    "currentPage": 1
+  }
+}
+```
+
 ## 🧪 Testing
 
 Run tests:
@@ -754,8 +846,9 @@ jobotic-backend/
 | `NODE_ENV` | Environment (development/production) | development |
 | `RAPIDAPI_KEY` | RapidAPI key for JSearch | Required |
 | `GEMINI_API_KEY` | Google Gemini AI API key | Required |
-| `FRONTEND_URL` | Frontend application URL | http://localhost:3000 |
+| `FRONTEND_URL` | Frontend application URL | http://localhost:3000 (dev), https://portal.jobotic.ai (prod) |
 | `CACHE_TTL` | Cache time-to-live in seconds | 7200 |
+| `API_KEY` | Production API key for authentication | Required in production |
 
 ### Rate Limiting
 
@@ -806,6 +899,146 @@ For issues and questions:
 - Create an issue on GitHub
 - Check existing issues for solutions
 - Review API documentation
+
+---
+
+## 🔐 Production API Key Authentication Setup
+
+### For Backend Developer
+
+1. **Generate a secure API key**:
+```bash
+# Generate a random 32-character API key
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+2. **Add API key to your environment variables**:
+```env
+API_KEY=your_generated_api_key_here
+```
+
+3. **Add authentication middleware** (create `src/middleware/auth.js`):
+```javascript
+const authenticateApiKey = (req, res, next) => {
+  // Skip authentication in development
+  if (process.env.NODE_ENV === 'development') {
+    return next();
+  }
+
+  const apiKey = req.headers['x-api-key'];
+  
+  if (!apiKey) {
+    return res.status(401).json({
+      success: false,
+      error: 'API key required',
+      details: {
+        header: 'X-API-Key',
+        message: 'Include your API key in the X-API-Key header'
+      }
+    });
+  }
+
+  if (apiKey !== process.env.API_KEY) {
+    return res.status(403).json({
+      success: false,
+      error: 'Invalid API key',
+      details: {
+        message: 'The provided API key is invalid'
+      }
+    });
+  }
+
+  next();
+};
+
+module.exports = { authenticateApiKey };
+```
+
+4. **Apply middleware to protected routes**:
+```javascript
+const { authenticateApiKey } = require('./middleware/auth');
+
+// Apply to all API routes
+app.use('/api', authenticateApiKey);
+
+// Or apply to specific routes
+app.use('/api/jobs', authenticateApiKey);
+app.use('/api/resume', authenticateApiKey);
+```
+
+### For Frontend Developer
+
+**Production API Base URL**: Use your Vercel backend URL (e.g., `https://your-app.vercel.app/api`)
+
+**Authentication**: Include the API key in all requests:
+
+```javascript
+// JavaScript/React example
+const API_BASE_URL = 'https://your-vercel-app.vercel.app/api';
+const API_KEY = '9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c'; // Store securely in environment variables
+
+const apiRequest = async (endpoint, options = {}) => {
+  const url = `${API_BASE_URL}${endpoint}`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-API-Key': API_KEY,
+    ...options.headers
+  };
+
+  const response = await fetch(url, {
+    ...options,
+    headers
+  });
+
+  if (!response.ok) {
+    throw new Error(`API request failed: ${response.status}`);
+  }
+
+  return response.json();
+};
+
+// Usage examples
+const searchJobs = async (searchData) => {
+  return apiRequest('/jobs/search', {
+    method: 'POST',
+    body: JSON.stringify(searchData)
+  });
+};
+
+const matchJobs = async (resumeData) => {
+  return apiRequest('/jobs/match', {
+    method: 'POST',
+    body: JSON.stringify(resumeData)
+  });
+};
+```
+
+**Environment Variables for Frontend**:
+```env
+REACT_APP_API_BASE_URL=https://your-vercel-app.vercel.app/api
+REACT_APP_API_KEY=9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c
+```
+
+### Vercel Deployment Environment Variables
+
+Set these in your Vercel dashboard:
+
+```env
+RAPIDAPI_KEY=your_rapidapi_key
+GEMINI_API_KEY=your_gemini_api_key
+FRONTEND_URL=https://portal.jobotic.ai
+NODE_ENV=production
+CACHE_TTL=7200
+API_KEY=9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c
+```
+
+### Frontend Domain Setup
+
+1. **Frontend**: Deploy at `https://portal.jobotic.ai`
+2. **Backend**: Use Vercel's provided URL (e.g., `https://jobotic-backend.vercel.app`)
+3. **API Endpoint**: `https://jobotic-backend.vercel.app/api`
+
+No need to deploy backend on your custom domain - Vercel's URL works perfectly fine.
 
 ---
 

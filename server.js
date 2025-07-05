@@ -8,6 +8,7 @@ dotenv.config();
 // Import middleware
 const { errorHandler, notFoundHandler } = require('./src/middleware/errorHandler');
 const { generalLimiter } = require('./src/middleware/rateLimiter');
+const { authenticateApiKey } = require('./src/middleware/auth');
 
 // Import routes
 const jobRoutes = require('./src/routes/jobs.routes');
@@ -31,12 +32,28 @@ if (process.env.NODE_ENV === 'production') {
  */
 
 // 1. CORS configuration
+const allowedOrigins = [
+  process.env.FRONTEND_URL || 'http://localhost:5173',
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'https://portal.jobotic.ai'
+];
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Key']
 }));
 
 // 2. Body parsing middleware with increased limit
@@ -63,15 +80,20 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// 5. Mount API routes
+// 5. API Authentication (for protected routes)
+app.use('/api/jobs', authenticateApiKey);
+app.use('/api/resume', authenticateApiKey);
+app.use('/api/download', authenticateApiKey);
+
+// 6. Mount API routes
 app.use('/api/jobs', jobRoutes);
 app.use('/api/resume', resumeRoutes);
 app.use('/api/download', downloadRoutes);
 
-// 6. 404 handler (after all routes)
+// 7. 404 handler (after all routes)
 app.use(notFoundHandler);
 
-// 7. Global error handler (must be last!)
+// 8. Global error handler (must be last!)
 app.use(errorHandler);
 
 /**
@@ -135,7 +157,7 @@ if (process.env.VERCEL) {
       
       // Start server
       const PORT = process.env.PORT || 3001;
-      server = app.listen(PORT, () => {
+      server = app.listen(PORT, '0.0.0.0', () => {
         console.log(`🚀 Server is running on port ${PORT}`);
         console.log(`📍 API endpoints available at http://localhost:${PORT}/api`);
         console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
