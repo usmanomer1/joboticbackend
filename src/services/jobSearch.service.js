@@ -374,6 +374,9 @@ class JobSearchService {
         return {
           job_id: job.job_id,
           employer_name: job.employer_name,
+          employer_logo: job.employer_logo,
+          employer_website: job.employer_website,
+          employer_company_type: job.employer_company_type,
           job_title: job.job_title,
           job_description: cleanDescription,
           job_employment_type: job.job_employment_type,
