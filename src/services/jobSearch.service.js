@@ -364,41 +364,21 @@ class JobSearchService {
       
       // Process jobs for AI matching
       const processedJobs = (searchResults.jobs || []).map(job => {
-        // Strip HTML from description
+        // Strip HTML from description for AI processing
         const cleanDescription = this.stripHtml(job.job_description || '');
         
-        // Extract key requirements from highlights
+        // Extract key requirements from highlights for AI
         const requirements = this.extractRequirements(job.job_highlights);
         
-        // Return only necessary fields for matching
+        // Return ALL fields from JSearch API plus our additions
         return {
-          job_id: job.job_id,
-          employer_name: job.employer_name,
-          employer_logo: job.employer_logo,
-          employer_website: job.employer_website,
-          employer_company_type: job.employer_company_type,
-          job_title: job.job_title,
-          job_description: cleanDescription,
-          job_employment_type: job.job_employment_type,
-          job_is_remote: job.job_is_remote,
-          job_city: job.job_city,
-          job_state: job.job_state,
-          job_country: job.job_country,
-          job_required_experience: job.job_required_experience,
-          job_required_skills: job.job_required_skills,
-          job_required_education: job.job_required_education,
-          job_benefits: job.job_benefits,
-          job_min_salary: job.job_min_salary,
-          job_max_salary: job.job_max_salary,
-          job_salary_currency: job.job_salary_currency,
-          job_salary_period: job.job_salary_period,
-          job_apply_link: job.job_apply_link,
-          job_posted_at_timestamp: job.job_posted_at_timestamp,
+          ...job, // Preserve ALL original fields from JSearch
           
-          // Extracted data for AI
+          // Override description with clean version for AI
+          job_description_clean: cleanDescription,
+          
+          // Add our extracted/calculated fields
           extracted_requirements: requirements,
-          location_display: job.location_display,
-          posted_days_ago: job.posted_days_ago,
           
           // Placeholders for AI results
           match_score: null,
