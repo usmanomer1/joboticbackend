@@ -24,9 +24,10 @@ class PdfGeneratorService {
    */
   async getBrowser() {
     if (!this.browserInstance) {
-      // Configuration for deployment
+      // Configuration for Docker/Railway deployment
       const options = {
-        headless: 'new',
+        headless: true,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -34,42 +35,26 @@ class PdfGeneratorService {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--single-process',
-          '--disable-gpu'
+          '--disable-gpu',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding'
         ]
       };
       
-      // For Railway/production deployment
-      if (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production') {
-        // Try multiple possible paths for Chromium
-        const possiblePaths = [
-          process.env.PUPPETEER_EXECUTABLE_PATH,
-          '/usr/bin/chromium-browser', // Alpine Linux
-          '/usr/bin/chromium',          // Other Linux distros
-          'chromium'                     // System PATH
-        ].filter(Boolean);
-        
-        console.log('Trying Chromium paths:', possiblePaths);
-        
-        for (const path of possiblePaths) {
-          try {
-            options.executablePath = path;
-            console.log('Using Chromium path:', path);
-            break;
-          } catch (e) {
-            console.error(`Failed to use path ${path}:`, e.message);
-            continue;
-          }
-        }
-      }
-      
       try {
-        console.log('Launching Puppeteer with options:', options);
+        console.log('Launching Puppeteer with executable path:', options.executablePath);
         this.browserInstance = await puppeteer.launch(options);
         console.log('Puppeteer launched successfully');
       } catch (error) {
-        console.error('Failed to launch Puppeteer:', error);
-        throw error;
+        console.error('Failed to launch Puppeteer:', error.message);
+        console.error('Error details:', {
+          executablePath: options.executablePath,
+          nodeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch
+        });
+        throw new Error(`Cannot launch Chromium: ${error.message}`);
       }
     }
     return this.browserInstance;
