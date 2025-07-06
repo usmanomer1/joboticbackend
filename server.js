@@ -36,7 +36,10 @@ const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:5173',
   'http://localhost:3000',
   'http://localhost:5173',
-  'https://portal.jobotic.ai'
+  'http://localhost:5174',  // Vite alternative port
+  'https://portal.jobotic.ai',
+  'https://jobotic.ai',
+  'https://www.jobotic.ai'
 ];
 
 app.use(cors({
