@@ -184,37 +184,69 @@ class AIMatchingService {
    * @returns {string} Formatted prompt
    */
   prepareBatchPrompt(jobs, resumeText) {
-    // Simplify jobs for the prompt
+    // Include comprehensive job data for better AI analysis
     const simplifiedJobs = jobs.map(job => ({
       id: job.job_id,
       title: job.job_title,
       company: job.employer_name,
+      companyType: job.employer_company_type,
       description: this.truncateText(job.job_description_clean || job.job_description || '', 500),
+      highlights: job.job_highlights ? {
+        qualifications: job.job_highlights.Qualifications || [],
+        responsibilities: job.job_highlights.Responsibilities || [],
+        benefits: job.job_highlights.Benefits || []
+      } : null,
       requirements: {
         skills: job.job_required_skills || [],
         experience: job.job_required_experience || {},
         education: job.job_required_education || {},
+        experienceInLieuOfEducation: job.job_experience_in_place_of_education,
         extracted: job.extracted_requirements || {}
+      },
+      compensation: {
+        minSalary: job.job_min_salary,
+        maxSalary: job.job_max_salary,
+        currency: job.job_salary_currency,
+        period: job.job_salary_period,
+        benefits: job.job_benefits || []
       },
       location: {
         city: job.job_city,
         state: job.job_state,
         remote: job.job_is_remote
       },
-      employmentType: job.job_employment_type
+      metadata: {
+        employmentType: job.job_employment_type,
+        applyQualityScore: job.job_apply_quality_score,
+        onetSoc: job.job_onet_soc,
+        jobZone: job.job_onet_job_zone,
+        postedDaysAgo: job.posted_days_ago,
+        expiresInDays: job.application_deadline_days
+      }
     }));
     
-    const prompt = `Analyze this resume against these job descriptions.
-Score each job from 0-100 based on:
-- Skills match (40%): How well do the candidate's technical skills align?
-- Experience relevance (30%): Does their experience match the job requirements?
-- Education fit (20%): Does education level and field match?
-- Location compatibility (10%): Remote/on-site preferences
+    const prompt = `Analyze this resume against these job descriptions with enhanced data.
+
+SCORING CRITERIA (Total: 100 points):
+- Skills match (35%): Technical skills alignment with requirements AND highlights.qualifications
+- Experience relevance (25%): Experience vs requirements.experience AND job complexity (jobZone)
+- Education fit (15%): Education requirements considering experienceInLieuOfEducation flag
+- Career progression (10%): Current role vs target role using O*NET SOC codes
+- Company fit (10%): Company type, culture indicators from benefits/highlights
+- Timing factors (5%): Application urgency (expiresInDays), quality score, posting recency
+
+ENHANCED ANALYSIS FACTORS:
+- Use highlights.qualifications for detailed requirement matching
+- Consider applyQualityScore for application ease (higher = better candidate experience)
+- Factor in jobZone (1-5) for career level matching
+- Use compensation data to assess fit with candidate expectations
+- Consider experienceInLieuOfEducation when education doesn't match
+- Prioritize jobs expiring soon if score is similar
 
 Resume:
 ${this.truncateText(resumeText, 2000)}
 
-Jobs to analyze:
+Jobs to analyze (with full enriched data):
 ${JSON.stringify(simplifiedJobs, null, 2)}
 
 Return ONLY valid JSON (no markdown, no explanations):
@@ -224,19 +256,24 @@ Return ONLY valid JSON (no markdown, no explanations):
       "jobId": "string",
       "score": 85,
       "matchLabel": "STRONG MATCH",
-      "matchReasons": ["5+ years Python experience matches requirement", "Previous fintech experience relevant"],
-      "missingSkills": ["Kubernetes", "AWS"],
-      "keyStrengths": ["Python expertise", "Team leadership"]
+      "matchReasons": [
+        "Your 5+ years Python experience exceeds their 3-year requirement",
+        "Previous work at similar company type (startup) shows culture fit",
+        "Skills directly match 4 of 5 highlighted qualifications",
+        "High application quality score (0.9) indicates smooth process"
+      ],
+      "missingSkills": ["Kubernetes from requirements", "GraphQL from highlights"],
+      "keyStrengths": ["Python expertise matches primary need", "Leadership experience for senior role", "Remote work experience"]
     }
   ]
 }
 
-IMPORTANT RULES:
-1. Score must be 0-100
-2. matchLabel: 90+ = "STRONG MATCH", 70-89 = "GOOD MATCH", 50-69 = "FAIR MATCH", below 50 = "WEAK MATCH"
-3. Provide 2-4 specific match reasons
-4. List actual missing skills from job requirements
-5. Identify 2-3 key strengths from resume relevant to each job`;
+RULES:
+1. Score 0-100 using ALL available data points
+2. matchLabel: 90+ = "STRONG MATCH", 70-89 = "GOOD MATCH", 50-69 = "FAIR MATCH", <50 = "WEAK MATCH"
+3. Provide 3-5 specific, data-driven match reasons
+4. List missing skills from BOTH requirements AND highlights.qualifications
+5. Consider ALL metadata fields for comprehensive matching`;
     
     return prompt;
   }
