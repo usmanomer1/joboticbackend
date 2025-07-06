@@ -126,7 +126,7 @@ class ResumeAnalysisService {
       console.error(`Analysis error (${retries} retries left):`, {
         message: error.message,
         stack: error.stack?.split('\n').slice(0, 5).join('\n'),
-        isVercel: !!process.env.VERCEL
+        isRailway: !!process.env.RAILWAY_ENVIRONMENT
       });
       
       if (retries > 0 && !error.message.includes('safety') && !error.message.includes('SAFETY')) {

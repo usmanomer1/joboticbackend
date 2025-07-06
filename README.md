@@ -5,7 +5,7 @@ AI-powered job matching platform backend that helps job seekers find perfect mat
 ## 🎯 **For Frontend Engineer - Quick Start**
 
 ### **Production API Details**
-- **API Base URL**: `https://jobotic-backend.vercel.app` (replace with actual Vercel URL)
+- **API Base URL**: `https://your-app.railway.app` (replace with your Railway URL)
 - **API Key**: `9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c`
 - **Authentication**: Include `X-API-Key` header in all requests
 - **Frontend Domain**: `https://portal.jobotic.ai`
@@ -968,13 +968,13 @@ app.use('/api/resume', authenticateApiKey);
 
 ### For Frontend Developer
 
-**Production API Base URL**: Use your Vercel backend URL (e.g., `https://your-app.vercel.app/api`)
+**Production API Base URL**: Use your Railway backend URL (e.g., `https://your-app.railway.app/api`)
 
 **Authentication**: Include the API key in all requests:
 
 ```javascript
 // JavaScript/React example
-const API_BASE_URL = 'https://your-vercel-app.vercel.app/api';
+const API_BASE_URL = 'https://your-app.railway.app/api';
 const API_KEY = '9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c'; // Store securely in environment variables
 
 const apiRequest = async (endpoint, options = {}) => {
@@ -1015,30 +1015,50 @@ const matchJobs = async (resumeData) => {
 
 **Environment Variables for Frontend**:
 ```env
-REACT_APP_API_BASE_URL=https://your-vercel-app.vercel.app/api
+REACT_APP_API_BASE_URL=https://your-app.railway.app/api
 REACT_APP_API_KEY=9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c
 ```
 
-### Vercel Deployment Environment Variables
+## 🚀 Railway Deployment
 
-Set these in your Vercel dashboard:
+### Environment Variables
+
+Set these using Railway CLI or dashboard:
 
 ```env
+NODE_ENV=production
+PORT=3001
 RAPIDAPI_KEY=your_rapidapi_key
 GEMINI_API_KEY=your_gemini_api_key
-FRONTEND_URL=https://portal.jobotic.ai
-NODE_ENV=production
-CACHE_TTL=7200
 API_KEY=9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c
+FRONTEND_URL=https://portal.jobotic.ai
+SUPABASE_URL=your_supabase_url
+SUPABASE_ANON_KEY=your_supabase_key
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+CACHE_TTL=7200
+```
+
+### Deploy Commands
+
+```bash
+# Deploy to Railway
+railway up
+
+# View logs
+railway logs
+
+# Open dashboard
+railway open
 ```
 
 ### Frontend Domain Setup
 
 1. **Frontend**: Deploy at `https://portal.jobotic.ai`
-2. **Backend**: Use Vercel's provided URL (e.g., `https://jobotic-backend.vercel.app`)
-3. **API Endpoint**: `https://jobotic-backend.vercel.app/api`
+2. **Backend**: Use Railway's provided URL (e.g., `https://your-app.railway.app`)
+3. **API Endpoint**: `https://your-app.railway.app/api`
 
-No need to deploy backend on your custom domain - Vercel's URL works perfectly fine.
+Railway provides better support for Puppeteer and persistent services than serverless platforms.
 
 ---
 

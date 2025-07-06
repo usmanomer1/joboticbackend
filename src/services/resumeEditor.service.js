@@ -14,7 +14,7 @@ const { AppError } = require('../middleware/errorHandler');
 const sessions = new Map();
 
 // Temp file storage
-const TEMP_DIR = process.env.VERCEL ? '/tmp' : path.join(process.cwd(), 'temp', 'editor');
+const TEMP_DIR = '/tmp'; // Use system temp directory
 const SESSION_TTL = 3600000; // 1 hour
 const CLEANUP_INTERVAL = 3600000; // 1 hour
 

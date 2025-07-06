@@ -137,16 +137,7 @@ async function validateStartup() {
   console.log('========================\n');
 }
 
-/**
- * For Vercel serverless deployment
- */
-if (process.env.VERCEL) {
-  // In Vercel environment, just run validation
-  validateStartup().catch(error => {
-    console.error('❌ Startup validation failed:', error);
-  });
-} else {
-  // Local development or traditional hosting
+// Local development or Railway deployment
   /**
    * Server Instance
    */
@@ -239,9 +230,8 @@ if (process.env.VERCEL) {
     gracefulShutdown('UNHANDLED_REJECTION');
   });
 
-  // Start the server
-  startServer();
-}
+// Start the server
+startServer();
 
-// Export for Vercel serverless
+// Export app for testing
 module.exports = app;
