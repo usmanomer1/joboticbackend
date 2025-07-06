@@ -24,7 +24,7 @@ class PdfGeneratorService {
    */
   async getBrowser() {
     if (!this.browserInstance) {
-      // Configuration for Vercel deployment
+      // Configuration for deployment
       const options = {
         headless: 'new',
         args: [

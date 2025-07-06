@@ -14,7 +14,7 @@ const cache = require('../utils/cache');
 
 // Document generation configuration
 const DOC_CONFIG = {
-  TEMP_DIR: process.env.VERCEL ? '/tmp' : path.join(process.cwd(), 'temp', 'documents'),
+  TEMP_DIR: '/tmp', // Use system temp directory
   FILE_TTL: 3600000, // 1 hour in milliseconds
   CLEANUP_INTERVAL: 900000, // 15 minutes
   MAX_FILE_SIZE: 10485760, // 10MB
@@ -29,10 +29,8 @@ class DocumentGenerationService {
     // Ensure temp directory exists
     this.initializeTempDirectory();
     
-    // Start cleanup job (only in non-serverless environments)
-    if (!process.env.VERCEL) {
-      this.startCleanupJob();
-    }
+    // Start cleanup job
+    this.startCleanupJob();
   }
 
   /**
@@ -40,14 +38,11 @@ class DocumentGenerationService {
    */
   async initializeTempDirectory() {
     try {
-      if (!process.env.VERCEL) {
-        // Only create directory in non-serverless environments
-        await fs.mkdir(DOC_CONFIG.TEMP_DIR, { recursive: true });
-      }
+      await fs.mkdir(DOC_CONFIG.TEMP_DIR, { recursive: true });
       console.log('Temporary directory ready:', DOC_CONFIG.TEMP_DIR);
     } catch (error) {
       console.error('Failed to initialize temp directory:', error);
-      // In Vercel, /tmp always exists, so this shouldn't fail
+      // Directory creation might fail if already exists
     }
   }
 
@@ -98,12 +93,12 @@ class DocumentGenerationService {
         stack: error.stack,
         format,
         tempDir: DOC_CONFIG.TEMP_DIR,
-        isVercel: !!process.env.VERCEL
+        isRailway: !!process.env.RAILWAY_ENVIRONMENT
       });
       throw new AppError('Failed to generate document', 500, {
         originalError: error.message,
         format,
-        environment: process.env.VERCEL ? 'vercel' : 'local'
+        environment: process.env.RAILWAY_ENVIRONMENT ? 'railway' : 'local'
       });
     }
   }
