@@ -31,51 +31,78 @@ class ResumeEditorV2Service {
       const editSchema = this.generateEditSchema(sections);
       
       // Store in Supabase
-      const sessionId = uuidv4();
       console.log('Attempting to save to Supabase...');
-      console.log('Session ID:', sessionId);
       console.log('User ID:', userId);
       console.log('Sections count:', sections.length);
       console.log('Schema sections:', editSchema.length);
       
-      const insertData = {
-        id: sessionId,
-        user_id: userId,
-        resume_text: resumeText,  // Changed from original_text
-        sections: sections,
-        schema: editSchema,  // Changed from edit_schema
-        created_at: new Date().toISOString(),
-        last_edited_at: new Date().toISOString()
-      };
-      
-      console.log('Insert data size:', JSON.stringify(insertData).length, 'bytes');
-      
-      const { data: resumeData, error } = await supabase
+      // First, try to find existing resume for this user
+      const { data: existingResume } = await supabase
         .from('resume_data')
-        .insert(insertData)
-        .select()
+        .select('*')
+        .eq('user_id', userId)
         .single();
       
-      if (error) {
-        console.error('=== SUPABASE ERROR ===');
-        console.error('Error code:', error.code);
-        console.error('Error message:', error.message);
-        console.error('Error details:', error.details);
-        console.error('Error hint:', error.hint);
-        console.error('Full error:', JSON.stringify(error, null, 2));
+      let resumeData;
+      let sessionId;
+      
+      if (existingResume) {
+        console.log('Found existing resume, updating...');
+        // Update existing resume
+        const { data: updated, error: updateError } = await supabase
+          .from('resume_data')
+          .update({
+            resume_text: resumeText,
+            sections: sections,
+            schema: editSchema,
+            last_edited_at: new Date().toISOString()
+          })
+          .eq('user_id', userId)
+          .select()
+          .single();
         
-        // Check specific error types
-        if (error.code === '42P01') {
-          throw new AppError('Database table does not exist', 500);
-        } else if (error.code === '23505') {
-          throw new AppError('Duplicate entry - this session already exists', 500);
-        } else if (error.code === '22P02') {
-          throw new AppError('Invalid data format', 500);
-        } else if (error.message?.includes('JWT')) {
-          throw new AppError('Authentication error with database', 500);
+        if (updateError) {
+          console.error('Update error:', updateError);
+          throw new AppError(`Failed to update resume data: ${updateError.message}`, 500);
         }
         
-        throw new AppError(`Failed to save resume data: ${error.message}`, 500);
+        resumeData = updated;
+        // Use existing ID as sessionId
+        sessionId = existingResume.id;
+        console.log('Using existing session ID:', sessionId);
+      } else {
+        console.log('No existing resume, creating new...');
+        // Generate new session ID
+        sessionId = uuidv4();
+        
+        const insertData = {
+          id: sessionId,
+          user_id: userId,
+          resume_text: resumeText,
+          sections: sections,
+          schema: editSchema,
+          created_at: new Date().toISOString(),
+          last_edited_at: new Date().toISOString()
+        };
+        
+        // Insert new resume
+        const { data: inserted, error: insertError } = await supabase
+          .from('resume_data')
+          .insert(insertData)
+          .select()
+          .single();
+        
+        if (insertError) {
+          console.error('=== SUPABASE ERROR ===');
+          console.error('Error code:', insertError.code);
+          console.error('Error message:', insertError.message);
+          console.error('Full error:', JSON.stringify(insertError, null, 2));
+          
+          throw new AppError(`Failed to save resume data: ${insertError.message}`, 500);
+        }
+        
+        resumeData = inserted;
+        console.log('Created new session ID:', sessionId);
       }
       
       // Generate initial PDF
