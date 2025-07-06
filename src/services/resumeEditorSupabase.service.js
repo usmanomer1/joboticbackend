@@ -7,10 +7,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { v4: uuidv4 } = require('uuid');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
 const { AppError } = require('../middleware/errorHandler');
-// Temporarily use simple PDF generator for Railway
-const pdfGenerator = process.env.RAILWAY_ENVIRONMENT 
-  ? require('./simplePdfGenerator')
-  : require('./pdfGenerator');
+const pdfGenerator = require('./pdfGenerator');
 
 // Initialize Supabase client
 const supabase = createClient(

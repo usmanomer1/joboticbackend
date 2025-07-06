@@ -1,8 +1,8 @@
 # Use Node.js 18 alpine for smaller image
 FROM node:18-alpine
 
-# Install Chromium and dependencies
-RUN apk add --no-cache \
+# Install dependencies for Chromium
+RUN apk update && apk add --no-cache \
     chromium \
     nss \
     freetype \
@@ -10,29 +10,35 @@ RUN apk add --no-cache \
     harfbuzz \
     ca-certificates \
     ttf-freefont \
+    font-noto-emoji \
     && rm -rf /var/cache/apk/*
 
-# Tell Puppeteer where to find Chromium
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# Set Puppeteer environment variables
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
-# Set working directory
+# Create app directory
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies (including dev dependencies for Puppeteer)
+# Install dependencies
 RUN npm ci --production=false
-
-# Verify Chromium installation
-RUN chromium-browser --version || echo "Chromium not found"
 
 # Copy application code
 COPY . .
+
+# Create a non-root user to run the app
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001 && \
+    chown -R nodejs:nodejs /app
+
+# Switch to non-root user
+USER nodejs
 
 # Expose port
 EXPOSE 3001
 
 # Start the application
-CMD ["npm", "start"]
+CMD ["node", "server.js"]
