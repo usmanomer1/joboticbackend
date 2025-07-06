@@ -88,12 +88,14 @@ app.use('/api/jobs', authenticateApiKey);
 app.use('/api/resume', authenticateApiKey);
 app.use('/api/download', authenticateApiKey);
 app.use('/api/resume-editor', authenticateApiKey);
+app.use('/api/resume-simple', authenticateApiKey);
 
 // 6. Mount API routes
 app.use('/api/jobs', jobRoutes);
 app.use('/api/resume', resumeRoutes);
 app.use('/api/download', downloadRoutes);
-app.use('/api/resume-editor', require('./src/routes/resumeEditorSupabase.routes'));
+app.use('/api/resume-editor', require('./src/routes/resumeEditor.routes'));
+app.use('/api/resume-simple', require('./src/routes/resumeEditorSimple.routes'));
 
 // 7. 404 handler (after all routes)
 app.use(notFoundHandler);
