@@ -1,0 +1,203 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    /* Use Computer Modern or similar serif font to match LaTeX */
+    @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;500;600;700&family=Source+Sans+Pro:wght@400;600;700&display=swap');
+    
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: 'Computer Modern', 'EB Garamond', 'Times New Roman', serif;
+      font-size: 11pt;
+      line-height: 1.3;
+      color: #000;
+      background: white;
+    }
+    
+    .container {
+      max-width: 8.5in;
+      margin: 0 auto;
+      padding: 0.5in;
+    }
+    
+    /* Header Styles - Centered like Jake's */
+    .header {
+      text-align: center;
+      margin-bottom: 0.3in;
+    }
+    
+    .name {
+      font-size: 20pt;
+      font-weight: 700;
+      color: #000;
+      text-transform: uppercase;
+      letter-spacing: 3px;
+      margin-bottom: 5px;
+    }
+    
+    .contact-line {
+      font-size: 10pt;
+      color: #000;
+      margin-top: 3px;
+    }
+    
+    .contact-line a {
+      color: #000;
+      text-decoration: underline;
+    }
+    
+    .pipe {
+      margin: 0 0.5em;
+    }
+    
+    /* Section Styles - ALL CAPS with underline */
+    .section {
+      margin-bottom: 0.15in;
+      margin-top: 0.15in;
+    }
+    
+    .section-header {
+      font-size: 12pt;
+      font-weight: 400;
+      color: #000;
+      margin-bottom: 4px;
+      padding-bottom: 1px;
+      border-bottom: 0.5pt solid #000;
+      font-variant: small-caps;
+      letter-spacing: 1px;
+    }
+    
+    /* Experience/Education Item Styles - Two column layout */
+    .item-row {
+      display: table;
+      width: 100%;
+      margin-bottom: 2pt;
+    }
+    
+    .item-left {
+      display: table-cell;
+      vertical-align: top;
+      width: 75%;
+    }
+    
+    .item-right {
+      display: table-cell;
+      vertical-align: top;
+      width: 25%;
+      text-align: right;
+      font-size: 10pt;
+    }
+    
+    .item-title {
+      font-weight: 700;
+      font-size: 11pt;
+      color: #000;
+    }
+    
+    .item-subtitle {
+      font-size: 10pt;
+      font-style: italic;
+      color: #000;
+    }
+    
+    .item-date {
+      font-size: 10pt;
+      font-style: italic;
+      color: #000;
+    }
+    
+    /* Bullet Points - Smaller and tighter */
+    .bullet-list {
+      margin-left: 0.2in;
+      margin-top: 2pt;
+      margin-bottom: 8pt;
+    }
+    
+    .bullet-item {
+      margin-bottom: 2pt;
+      color: #000;
+      font-size: 10pt;
+      position: relative;
+      padding-left: 0.15in;
+      text-align: left;
+    }
+    
+    .bullet-item:before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      color: #000;
+    }
+    
+    /* Projects Section - Special formatting */
+    .project-item {
+      margin-bottom: 8pt;
+    }
+    
+    .project-header {
+      display: table;
+      width: 100%;
+      margin-bottom: 2pt;
+    }
+    
+    .project-title {
+      display: table-cell;
+      font-weight: 700;
+      font-size: 10pt;
+      vertical-align: top;
+    }
+    
+    .project-tech {
+      font-weight: 400;
+      font-style: italic;
+    }
+    
+    .project-date {
+      display: table-cell;
+      text-align: right;
+      font-size: 10pt;
+      font-style: italic;
+      vertical-align: top;
+    }
+    
+    /* Skills Section - Inline layout */
+    .skills-container {
+      margin-left: 0.2in;
+      margin-top: 2pt;
+    }
+    
+    .skill-category {
+      margin-bottom: 3pt;
+      font-size: 10pt;
+    }
+    
+    .skill-label {
+      font-weight: 700;
+      color: #000;
+    }
+    
+    .skill-items {
+      color: #000;
+      font-weight: 400;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    
+      <div class="header">
+        <div class="name">Jake Ryan</div>
+        <div class="contact-line">123-456-7890<span class="pipe">|</span><a href="mailto:jake@su.edu">jake@su.edu</a><span class="pipe">|</span><a href="https://linkedin.com/in/jake">linkedin.com/in/jake</a><span class="pipe">|</span><a href="https://github.com/jake">github.com/jake</a></div>
+      </div>
+    
+    <div class="section"><div class="section-header">Education</div><div class="education-item"><div class="item-row"><div class="item-left"><span class="item-title">Southwestern University</span></div><div class="item-right"><span class="item-date">Georgetown, TX</span></div></div><div class="item-row"><div class="item-left"><span class="item-subtitle">Bachelor of Arts in Computer Science, Minor in Business</span></div><div class="item-right"><span class="item-date">Aug. 2018 -- May 2021</span></div></div></div><div class="education-item"><div class="item-row"><div class="item-left"><span class="item-title">Blinn College</span></div><div class="item-right"><span class="item-date">Bryan, TX</span></div></div><div class="item-row"><div class="item-left"><span class="item-subtitle">Associate&#039;s in Liberal Arts</span></div><div class="item-right"><span class="item-date">Aug. 2014 -- May 2018</span></div></div></div></div><div class="section"><div class="section-header">Experience</div><div class="experience-item"><div class="item-row"><div class="item-left"><span class="item-title">Undergraduate Research Assistant</span></div><div class="item-right"><span class="item-date">June 2020 -- Present</span></div></div><div class="item-row"><div class="item-left"><span class="item-subtitle">Texas A&amp;M University, College Station, TX</span></div><div class="item-right"></div></div><div class="bullet-list"><div class="bullet-item">Developed a REST API using FastAPI and PostgreSQL to store data from learning management systems</div><div class="bullet-item">Developed a full-stack web application using Flask, React, PostgreSQL and Docker to analyze GitHub data</div><div class="bullet-item">Explored ways to visualize GitHub collaboration in a classroom setting</div></div></div></div><div class="section"><div class="section-header">Projects</div><div class="project-item"><div class="project-header"><div class="project-title"><strong>Gitlytics</strong> <span class="project-tech">| Python, Flask, React, PostgreSQL, Docker</span></div><div class="project-date">June 2020 -- Present</div></div><div class="bullet-list"><div class="bullet-item">Developed a full-stack web application using with Flask serving a REST API with React as the frontend</div><div class="bullet-item">Implemented GitHub OAuth to get data from user&#039;s repositories</div><div class="bullet-item">Visualized GitHub data to show collaboration</div><div class="bullet-item">Used Celery and Redis for asynchronous tasks</div></div></div></div><div class="section"><div class="section-header">Technical Skills</div><div class="skills-container"><div class="skill-category"><span class="skill-label">Languages:</span> <span class="skill-items">Java, Python, C/C++, SQL (Postgres), JavaScript, HTML/CSS, R</span></div><div class="skill-category"><span class="skill-label">Frameworks:</span> <span class="skill-items">React, Node.js, Flask, JUnit, WordPress, Material-UI, FastAPI</span></div><div class="skill-category"><span class="skill-label">Developer Tools:</span> <span class="skill-items">Git, Docker, TravisCI, Google Cloud Platform, VS Code, Visual Studio, PyCharm, IntelliJ, Eclipse</span></div><div class="skill-category"><span class="skill-label">Libraries:</span> <span class="skill-items">pandas, NumPy, Matplotlib</span></div></div></div>
+  </div>
+</body>
+</html>
