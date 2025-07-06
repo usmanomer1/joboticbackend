@@ -33,6 +33,10 @@ class ResumeEditorSupabaseService {
       .eq('user_id', userId)
       .single();
     
+    if (fetchError && fetchError.code !== 'PGRST116') {
+      console.error('Error fetching existing resume:', fetchError);
+    }
+    
     let resumeData;
     
     if (existingResume) {
@@ -49,15 +53,22 @@ class ResumeEditorSupabaseService {
         .select()
         .single();
         
-      if (error) throw new AppError('Failed to update resume data', 500);
+      if (error) {
+        console.error('Supabase update error:', error);
+        throw new AppError(`Failed to update resume data: ${error.message}`, 500);
+      }
       resumeData = data;
     } else {
-      // Get profile ID
-      const { data: profile } = await supabase
+      // Get profile ID (optional - may not exist for all users)
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('id')
         .eq('user_id', userId)
         .single();
+      
+      if (profileError && profileError.code !== 'PGRST116') {
+        console.error('Profile lookup error:', profileError);
+      }
       
       // Create new resume data
       const { data, error } = await supabase
@@ -72,7 +83,10 @@ class ResumeEditorSupabaseService {
         .select()
         .single();
         
-      if (error) throw new AppError('Failed to create resume data', 500);
+      if (error) {
+        console.error('Supabase insert error:', error);
+        throw new AppError(`Failed to create resume data: ${error.message}`, 500);
+      }
       resumeData = data;
     }
     
