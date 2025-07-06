@@ -20,13 +20,23 @@ class ResumeEditorSupabaseService {
    * Parse resume and initialize/update Supabase data
    */
   async parseAndInitialize(userId, resumeText, jobId) {
+    console.log('=== PARSE AND INITIALIZE ===');
+    console.log('User ID:', userId);
+    console.log('Resume text length:', resumeText?.length);
+    console.log('Job ID:', jobId);
+    
     // Dynamically parse resume into sections
+    console.log('Parsing resume text...');
     const parsedData = this.intelligentParse(resumeText);
+    console.log('Parsed sections:', Object.keys(parsedData.sections));
     
     // Generate frontend-friendly edit schema
+    console.log('Generating edit schema...');
     const editSchema = this.generateEditSchema(parsedData.sections);
+    console.log('Edit schema sections:', editSchema.sections.length);
     
     // Check if user already has resume data
+    console.log('Checking for existing resume data...');
     const { data: existingResume, error: fetchError } = await supabase
       .from('resume_data')
       .select('*')

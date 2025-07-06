@@ -9,7 +9,7 @@ const { v4: uuidv4 } = require('uuid');
 const { validate } = require('../middleware/validators');
 const { body } = require('express-validator');
 const asyncHandler = require('../middleware/asyncHandler');
-const resumeEditorService = require('../services/resumeEditor.service');
+const resumeEditorService = require('../services/resumeEditorSupabase.service');
 const { AppError } = require('../middleware/errorHandler');
 
 // Validation schemas
@@ -63,29 +63,42 @@ const resumeEditorValidators = {
 router.post('/parse-for-edit',
   validate(resumeEditorValidators.parseForEdit),
   asyncHandler(async (req, res) => {
-    const { resumeText, jobId } = req.body;
+    const { resumeText, jobId, userId } = req.body;
     
-    console.log('Parsing resume for edit interface');
+    console.log('=== PARSE-FOR-EDIT REQUEST ===');
+    console.log('Resume text length:', resumeText?.length);
+    console.log('Job ID:', jobId);
+    console.log('User ID:', userId);
     
-    // Create a new editing session
-    const sessionId = uuidv4();
+    // Use provided userId or generate a temporary one
+    const userIdentifier = userId || `temp_${uuidv4()}`;
+    console.log('Using user identifier:', userIdentifier);
     
     try {
-      // Parse resume and generate initial PDF
-      const result = await resumeEditorService.parseAndInitialize(sessionId, resumeText, jobId);
+      // Parse resume and generate initial PDF with Supabase integration
+      console.log('Calling parseAndInitialize...');
+      const result = await resumeEditorService.parseAndInitialize(userIdentifier, resumeText, jobId);
+      
+      console.log('Parse result:', {
+        sessionId: result.sessionId,
+        pdfUrl: result.pdfUrl,
+        hasEditSchema: !!result.editSchema,
+        hasMatchData: !!result.matchData
+      });
       
       res.json({
         success: true,
         data: {
-          sessionId,
-          pdfUrl: `/api/resume-editor/preview/${sessionId}`,
-          schema: result.schema,
-          sections: result.sections
+          sessionId: result.sessionId,
+          pdfUrl: result.pdfUrl,
+          editSchema: result.editSchema,
+          matchData: result.matchData
         }
       });
     } catch (error) {
       console.error('Parse for edit error:', error);
-      throw new AppError('Failed to parse resume for editing', 500);
+      console.error('Error stack:', error.stack);
+      throw new AppError(`Failed to parse resume for editing: ${error.message}`, 500);
     }
   })
 );
@@ -98,30 +111,39 @@ router.post('/parse-for-edit',
 router.post('/update-section',
   validate(resumeEditorValidators.updateSection),
   asyncHandler(async (req, res) => {
-    const { sessionId, sectionId, data } = req.body;
+    const { sessionId, sectionId, data, jobId } = req.body;
     
-    console.log(`Updating section ${sectionId} for session ${sessionId}`);
+    console.log('=== UPDATE SECTION REQUEST ===');
+    console.log(`Session: ${sessionId}, Section: ${sectionId}`);
+    console.log('Data:', JSON.stringify(data, null, 2));
     
     try {
       // Update section and regenerate PDF
-      const result = await resumeEditorService.updateSection(sessionId, sectionId, data);
+      const result = await resumeEditorService.updateSection(sessionId, sectionId, data, jobId);
       
       if (!result) {
         throw new AppError('Session not found or expired', 404);
       }
       
+      console.log('Update result:', {
+        newPdfUrl: result.newPdfUrl,
+        status: result.status,
+        newScore: result.newScore
+      });
+      
       res.json({
         success: true,
         data: {
-          pdfUrl: `/api/resume-editor/preview/${sessionId}?v=${Date.now()}`,
-          updated: true,
-          sectionId
+          pdfUrl: result.newPdfUrl,
+          status: result.status,
+          newScore: result.newScore
         }
       });
     } catch (error) {
       if (error.statusCode === 404) throw error;
       console.error('Update section error:', error);
-      throw new AppError('Failed to update resume section', 500);
+      console.error('Error stack:', error.stack);
+      throw new AppError(`Failed to update resume section: ${error.message}`, 500);
     }
   })
 );

@@ -64,7 +64,9 @@ class PdfGeneratorService {
    * Generate PDF from resume data
    */
   async generatePDF(resumeData, userId) {
-    console.log('PDF Generator: Starting PDF generation for user:', userId);
+    console.log('=== PDF GENERATOR CALLED ===');
+    console.log('User ID:', userId);
+    console.log('Resume data sections:', Object.keys(resumeData.sections || {}));
     
     let browser;
     let page;
@@ -76,6 +78,10 @@ class PdfGeneratorService {
       // Generate HTML content
       console.log('Generating HTML content...');
       const html = this.generateHTML(resumeData);
+      console.log('HTML length:', html.length);
+      
+      // Log first 500 chars of HTML for debugging
+      console.log('HTML preview:', html.substring(0, 500) + '...');
       
       // Set content and wait for styles to load
       console.log('Setting page content...');
@@ -95,6 +101,8 @@ class PdfGeneratorService {
       });
       
       console.log('PDF buffer generated, size:', pdfBuffer.length);
+      console.log('PDF buffer type:', typeof pdfBuffer);
+      console.log('Is Buffer?', Buffer.isBuffer(pdfBuffer));
       
       // Upload to Supabase
       const fileName = `${userId}/resume_${Date.now()}_${uuidv4()}.pdf`;
@@ -113,6 +121,7 @@ class PdfGeneratorService {
       }
       
       console.log('PDF uploaded successfully to Supabase');
+      console.log('Upload response:', data);
       
       // Get public URL
       const { data: { publicUrl } } = supabase.storage
@@ -124,6 +133,7 @@ class PdfGeneratorService {
       
     } catch (error) {
       console.error('PDF generation error:', error);
+      console.error('Error stack:', error.stack);
       throw error;
     } finally {
       if (page) {
