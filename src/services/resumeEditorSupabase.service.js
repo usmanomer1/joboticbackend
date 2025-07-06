@@ -929,12 +929,18 @@ class ResumeEditorSupabaseService {
    */
   async generateAndUploadPdf(userId, sections) {
     try {
+      console.log('Starting PDF generation for user:', userId);
+      console.log('Sections keys:', Object.keys(sections));
+      
       // Use the PDF generator service
       const pdfUrl = await pdfGenerator.generatePDF({ sections }, userId);
+      console.log('PDF generated successfully:', pdfUrl);
+      
       return pdfUrl;
     } catch (error) {
       console.error('Error generating PDF:', error);
-      throw new AppError('Failed to generate PDF', 500);
+      console.error('Error stack:', error.stack);
+      throw new AppError(`Failed to generate PDF: ${error.message}`, 500);
     }
   }
 
