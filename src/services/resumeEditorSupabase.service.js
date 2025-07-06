@@ -8,16 +8,12 @@ const { v4: uuidv4 } = require('uuid');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
 const { AppError } = require('../middleware/errorHandler');
 const pdfGenerator = require('./pdfGenerator');
-const supabaseConfig = require('../../config/supabase.config');
 
 // Initialize Supabase client
-console.log('Initializing Supabase with config:', {
-  url: supabaseConfig.url,
-  keyLength: supabaseConfig.anonKey?.length,
-  keyPreview: supabaseConfig.anonKey?.substring(0, 20) + '...'
-});
-
-const supabase = createClient(supabaseConfig.url, supabaseConfig.anonKey);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
 class ResumeEditorSupabaseService {
   /**

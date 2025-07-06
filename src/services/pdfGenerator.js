@@ -7,10 +7,12 @@ const puppeteer = require('puppeteer');
 const { createClient } = require('@supabase/supabase-js');
 const { v4: uuidv4 } = require('uuid');
 const { AppError } = require('../middleware/errorHandler');
-const supabaseConfig = require('../../config/supabase.config');
 
 // Initialize Supabase client
-const supabase = createClient(supabaseConfig.url, supabaseConfig.anonKey);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
 class PdfGeneratorService {
   constructor() {
