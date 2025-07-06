@@ -71,7 +71,7 @@ const downloadValidators = {
 };
 
 /**
- * @route   POST /api/resume/download
+ * @route   POST /api/download/generate
  * @desc    Generate document and return download URL
  * @access  Public (rate limited)
  * @body    {
@@ -86,7 +86,7 @@ const downloadValidators = {
  *   }
  * }
  */
-router.post('/resume/download',
+router.post('/generate',
   aiLimiter, // Apply AI rate limiter since this uses resources
   validate(downloadValidators.generateDocument),
   asyncHandler(async (req, res) => {
@@ -180,6 +180,57 @@ router.get('/:fileId',
         throw new AppError('File not found or has expired', 404);
       }
       
+      throw error;
+    }
+  })
+);
+
+/**
+ * @route   GET /api/download/preview/:fileId
+ * @desc    Preview file (PDF only) in browser
+ * @access  Public
+ * @params  fileId: UUID of the file
+ */
+router.get('/preview/:fileId',
+  generalLimiter,
+  validate(downloadValidators.downloadFile),
+  asyncHandler(async (req, res) => {
+    const { fileId } = req.params;
+    
+    console.log(`File preview requested: ${fileId}`);
+    
+    try {
+      // Get file info
+      const fileInfo = await documentGenerationService.getFileInfo(fileId);
+      
+      // Check if file has expired
+      if (Date.now() > fileInfo.expiresAt) {
+        await documentGenerationService.deleteFile(fileId);
+        throw new AppError('File has expired', 410);
+      }
+      
+      // Only allow PDF preview
+      if (fileInfo.format !== 'pdf') {
+        throw new AppError('Preview is only available for PDF files', 400);
+      }
+      
+      // Read file buffer
+      const buffer = await documentGenerationService.readFile(fileId);
+      
+      // Set headers for inline display
+      res.set({
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `inline; filename="${fileInfo.filename}"`,
+        'Content-Length': buffer.length,
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      });
+      
+      // Send file
+      res.send(buffer);
+      
+      console.log(`File preview served: ${fileId}`);
+    } catch (error) {
+      console.error('File preview error:', error);
       throw error;
     }
   })
