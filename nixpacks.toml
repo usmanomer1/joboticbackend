@@ -1,0 +1,11 @@
+# Nixpacks configuration for Railway deployment
+# This ensures Puppeteer dependencies are installed
+
+[phases.setup]
+nixPkgs = ["...", "chromium"]
+
+[phases.install]
+cmds = ["npm ci --production=false"]
+
+[start]
+cmd = "npm start"

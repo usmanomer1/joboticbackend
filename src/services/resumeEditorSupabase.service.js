@@ -5,9 +5,9 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const { v4: uuidv4 } = require('uuid');
-const PDFDocument = require('pdfkit');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
 const { AppError } = require('../middleware/errorHandler');
+const pdfGenerator = require('./pdfGenerator');
 
 // Initialize Supabase client
 const supabase = createClient(
@@ -410,110 +410,13 @@ class ResumeEditorSupabaseService {
    * Generate PDF and upload to Supabase storage
    */
   async generateAndUploadPdf(userId, sections) {
-    const pdfBuffer = await this.generatePdf(sections);
-    
-    const fileName = `${userId}/resume_${Date.now()}.pdf`;
-    
-    // Upload to Supabase storage
-    const { data, error } = await supabase.storage
-      .from('resumes')
-      .upload(fileName, pdfBuffer, {
-        contentType: 'application/pdf',
-        upsert: true
-      });
-    
-    if (error) throw new AppError('Failed to upload PDF', 500);
-    
-    // Get public URL
-    const { data: { publicUrl } } = supabase.storage
-      .from('resumes')
-      .getPublicUrl(fileName);
-    
-    return publicUrl;
+    // Use the new puppeteer-based PDF generator
+    const resumeData = { sections };
+    const pdfUrl = await pdfGenerator.generatePDF(resumeData, userId);
+    return pdfUrl;
   }
 
-  /**
-   * Generate PDF from sections
-   */
-  async generatePdf(sections) {
-    const doc = new PDFDocument({
-      size: 'LETTER',
-      margins: { top: 36, bottom: 36, left: 36, right: 36 }
-    });
 
-    const chunks = [];
-    doc.on('data', chunk => chunks.push(chunk));
-
-    // Render each section dynamically
-    Object.entries(sections).forEach(([key, section]) => {
-      if (key === 'personalInfo') {
-        this.renderPersonalInfo(doc, section);
-      } else {
-        this.renderDynamicSection(doc, section);
-      }
-    });
-
-    doc.end();
-
-    return new Promise((resolve) => {
-      doc.on('end', () => {
-        resolve(Buffer.concat(chunks));
-      });
-    });
-  }
-
-  /**
-   * Render dynamic section based on type
-   */
-  renderDynamicSection(doc, section) {
-    // Section header
-    doc.fontSize(12).font('Helvetica-Bold').text(section.title);
-    doc.moveTo(doc.x, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y).stroke();
-    doc.moveDown(0.5);
-    
-    switch (section.type) {
-      case 'paragraph':
-        doc.fontSize(10).font('Helvetica').text(section.content, { align: 'justify' });
-        break;
-        
-      case 'list':
-        section.items.forEach(item => {
-          doc.fontSize(10).font('Helvetica').text(`• ${item}`, { indent: 15 });
-          doc.moveDown(0.2);
-        });
-        break;
-        
-      case 'experience':
-        section.items.forEach(item => {
-          doc.fontSize(11).font('Helvetica-Bold').text(item.title || '');
-          if (item.organization) {
-            doc.fontSize(10).font('Helvetica-Oblique').text(item.organization);
-          }
-          if (item.dateRange) {
-            doc.fontSize(9).font('Helvetica').text(item.dateRange);
-          }
-          if (item.description) {
-            item.description.forEach(desc => {
-              doc.fontSize(10).font('Helvetica').text(`• ${desc}`, { indent: 15 });
-              doc.moveDown(0.2);
-            });
-          }
-          doc.moveDown(0.5);
-        });
-        break;
-        
-      case 'skills':
-        section.categories.forEach(cat => {
-          doc.fontSize(10)
-            .font('Helvetica-Bold').text(`${cat.name}: `, { continued: true })
-            .font('Helvetica').text(cat.skills);
-          doc.moveDown(0.3);
-        });
-        break;
-    }
-    
-    doc.moveDown(0.8);
-  }
 
   /**
    * Convert sections back to text
@@ -679,38 +582,6 @@ class ResumeEditorSupabaseService {
     return categories;
   }
 
-  renderPersonalInfo(doc, info) {
-    if (info.name) {
-      doc.fontSize(24).font('Helvetica-Bold').text(info.name, { align: 'center' });
-      doc.moveDown(0.2);
-    }
-    
-    if (info.title) {
-      doc.fontSize(14).font('Helvetica').text(info.title, { align: 'center' });
-      doc.moveDown(0.3);
-    }
-    
-    const contactParts = [];
-    if (info.email) contactParts.push(info.email);
-    if (info.phone) contactParts.push(info.phone);
-    if (info.location) contactParts.push(info.location);
-    
-    if (contactParts.length > 0) {
-      doc.fontSize(10).font('Helvetica').text(contactParts.join(' | '), { align: 'center' });
-      doc.moveDown(0.2);
-    }
-    
-    const linkParts = [];
-    if (info.linkedin) linkParts.push(info.linkedin);
-    if (info.github) linkParts.push(info.github);
-    if (info.website) linkParts.push(info.website);
-    
-    if (linkParts.length > 0) {
-      doc.fontSize(10).text(linkParts.join(' | '), { align: 'center' });
-    }
-    
-    doc.moveDown(1);
-  }
 
   /**
    * Get resume data for a user
