@@ -1,33 +1,35 @@
 // Supabase configuration
-// This file provides a fallback for environment variables
+// This file helps clean and validate environment variables
 
-const config = {
-  // Primary: Use environment variables
-  url: process.env.SUPABASE_URL?.trim(),
-  anonKey: process.env.SUPABASE_ANON_KEY?.trim(),
-  
-  // Fallback: Hardcoded values (for Railway issues)
-  fallback: {
-    url: 'https://fwtazrqqrtqmcsdzzdmi.supabase.co',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZ3dGF6cnFxcnRxbWNzZHp6ZG1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTE2MzEwNjQsImV4cCI6MjA2NzIwNzA2NH0.ks-Jta2Zx3ZfjU_69nG5auJczJCPVRCpcGAIdY_2_88'
-  }
-};
+function cleanEnvVar(value) {
+  if (!value) return null;
+  // Remove any whitespace, newlines, quotes
+  return value.trim().replace(/[\n\r"']/g, '');
+}
 
-// Use fallback if env vars are missing or invalid
 const supabaseConfig = {
-  url: config.url || config.fallback.url,
-  anonKey: config.anonKey || config.fallback.anonKey
+  url: cleanEnvVar(process.env.SUPABASE_URL),
+  anonKey: cleanEnvVar(process.env.SUPABASE_ANON_KEY)
 };
+
+// Debug logging to help diagnose issues
+console.log('Supabase Config Debug:', {
+  urlFound: !!supabaseConfig.url,
+  urlLength: supabaseConfig.url?.length,
+  keyFound: !!supabaseConfig.anonKey,
+  keyLength: supabaseConfig.anonKey?.length,
+  keyHasDots: supabaseConfig.anonKey?.includes('.'),
+  keySegments: supabaseConfig.anonKey?.split('.').length
+});
 
 // Validate the configuration
 if (!supabaseConfig.url || !supabaseConfig.anonKey) {
-  throw new Error('Supabase configuration is missing');
+  throw new Error('Supabase configuration is missing from environment variables');
 }
 
-// Validate key format (should be a JWT)
-if (!supabaseConfig.anonKey.includes('.') || supabaseConfig.anonKey.length < 100) {
-  console.error('Invalid Supabase key format detected, using fallback');
-  supabaseConfig.anonKey = config.fallback.anonKey;
+// Validate key format (should be a JWT with 3 segments)
+if (!supabaseConfig.anonKey.includes('.') || supabaseConfig.anonKey.split('.').length !== 3) {
+  throw new Error('Invalid Supabase anon key format - should be a JWT token');
 }
 
 module.exports = supabaseConfig;
