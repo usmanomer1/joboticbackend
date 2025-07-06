@@ -84,11 +84,13 @@ app.get('/api/health', (req, res) => {
 app.use('/api/jobs', authenticateApiKey);
 app.use('/api/resume', authenticateApiKey);
 app.use('/api/download', authenticateApiKey);
+app.use('/api/resume-editor', authenticateApiKey);
 
 // 6. Mount API routes
 app.use('/api/jobs', jobRoutes);
 app.use('/api/resume', resumeRoutes);
 app.use('/api/download', downloadRoutes);
+app.use('/api/resume-editor', require('./src/routes/resumeEditor.routes'));
 
 // 7. 404 handler (after all routes)
 app.use(notFoundHandler);
