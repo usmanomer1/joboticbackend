@@ -9,10 +9,14 @@ const { v4: uuidv4 } = require('uuid');
 const { AppError } = require('../middleware/errorHandler');
 
 // Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
+const supabaseUrl = process.env.SUPABASE_URL?.trim();
+const supabaseKey = process.env.SUPABASE_ANON_KEY?.trim();
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error('Missing Supabase credentials for PDF generator');
+}
+
+const supabase = supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
 class PdfGeneratorService {
   constructor() {

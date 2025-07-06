@@ -10,10 +10,15 @@ const { AppError } = require('../middleware/errorHandler');
 const pdfGenerator = require('./pdfGenerator');
 
 // Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-);
+const supabaseUrl = process.env.SUPABASE_URL?.trim();
+const supabaseKey = process.env.SUPABASE_ANON_KEY?.trim();
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error('Missing Supabase credentials');
+  throw new Error('Supabase configuration missing');
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 class ResumeEditorSupabaseService {
   /**
