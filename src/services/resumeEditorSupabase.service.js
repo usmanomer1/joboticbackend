@@ -194,49 +194,79 @@ class ResumeEditorSupabaseService {
     };
     
     // First non-empty line is usually name
-    info.name = topLines.find(line => line && !this.isContactInfo(line)) || '';
+    info.name = topLines[0] || '';
     
-    // Look for patterns in remaining lines
-    topLines.forEach(line => {
-      if (!line) return;
-      
-      // Email
-      const emailMatch = line.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
-      if (emailMatch) info.email = emailMatch[1];
-      
-      // Phone
-      const phoneMatch = line.match(/(\+?\d{1,4})?[-.\s]?\(?\d{1,4}\)?[-.\s]?\d{1,4}[-.\s]?\d{1,9}/);
-      if (phoneMatch && phoneMatch[0].length >= 10) info.phone = phoneMatch[0];
-      
-      // LinkedIn
-      if (line.toLowerCase().includes('linkedin')) {
-        info.linkedin = line;
+    // Check if second line has pipe separators (contact info line)
+    let contactLine = null;
+    for (let i = 1; i < topLines.length; i++) {
+      if (topLines[i] && topLines[i].includes('|')) {
+        contactLine = topLines[i];
+        break;
       }
+    }
+    
+    // Parse contact line with pipe separators
+    if (contactLine) {
+      const parts = contactLine.split('|').map(p => p.trim());
       
-      // GitHub
-      if (line.toLowerCase().includes('github')) {
-        info.github = line;
-      }
-      
-      // Portfolio/Website
-      if (line.match(/https?:\/\//) && !info.linkedin && !info.github) {
-        if (!info.website) {
-          info.website = line;
-        } else {
-          info.additionalLinks.push(line);
+      parts.forEach(part => {
+        // Email
+        const emailMatch = part.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+        if (emailMatch) {
+          info.email = emailMatch[1];
+          return;
         }
-      }
-      
-      // Location (City, State pattern)
-      if (line.match(/^[A-Za-z\s]+,\s*[A-Z]{2}$/)) {
-        info.location = line;
-      }
-      
-      // Professional title (if between name and contact info)
-      if (!this.isContactInfo(line) && line !== info.name && !info.title) {
-        info.title = line;
-      }
-    });
+        
+        // Phone
+        const phoneMatch = part.match(/(\+?\d{1,4})?[\-.\s]?\(?\d{1,4}\)?[\-.\s]?\d{1,4}[\-.\s]?\d{1,9}/);
+        if (phoneMatch && phoneMatch[0].replace(/\D/g, '').length >= 10) {
+          info.phone = phoneMatch[0].trim();
+          return;
+        }
+        
+        // LinkedIn
+        if (part.toLowerCase().includes('linkedin')) {
+          info.linkedin = part.includes('http') ? part : `https://${part}`;
+          return;
+        }
+        
+        // GitHub
+        if (part.toLowerCase().includes('github')) {
+          info.github = part.includes('http') ? part : `https://${part}`;
+          return;
+        }
+        
+        // Website
+        if (part.includes('.com') || part.includes('.org') || part.includes('.net')) {
+          info.website = part.includes('http') ? part : `https://${part}`;
+        }
+      });
+    } else {
+      // Fallback to line-by-line parsing
+      topLines.forEach((line, index) => {
+        if (!line || index === 0) return;
+        
+        // Email
+        const emailMatch = line.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+        if (emailMatch) info.email = emailMatch[1];
+        
+        // Phone
+        const phoneMatch = line.match(/(\+?\d{1,4})?[\-.\s]?\(?\d{1,4}\)?[\-.\s]?\d{1,4}[\-.\s]?\d{1,9}/);
+        if (phoneMatch && phoneMatch[0].replace(/\D/g, '').length >= 10) {
+          info.phone = phoneMatch[0];
+        }
+        
+        // Location (City, State pattern)
+        if (line.match(/^[A-Za-z\s]+,\s*[A-Z]{2}$/)) {
+          info.location = line;
+        }
+        
+        // Professional title (second line if not contact info)
+        if (!this.isContactInfo(line) && !info.title && index === 1) {
+          info.title = line;
+        }
+      });
+    }
     
     return info;
   }
@@ -285,39 +315,75 @@ class ResumeEditorSupabaseService {
    */
   processSection(key, section) {
     const content = section.content.join('\n');
+    const titleLower = section.title.toLowerCase();
     
-    // Detect section type based on content patterns
-    if (this.isListSection(content)) {
-      return {
-        title: section.title,
-        type: 'list',
-        items: this.parseListItems(section.content)
-      };
-    } else if (this.isExperienceSection(content)) {
-      return {
-        title: section.title,
-        type: 'experience',
-        items: this.parseExperienceItems(section.content)
-      };
-    } else if (this.isEducationSection(content)) {
-      return {
-        title: section.title,
-        type: 'education',
-        items: this.parseEducationItems(section.content)
-      };
-    } else if (this.isSkillsSection(content)) {
+    // Check section title first for better accuracy
+    if (titleLower.includes('skill') || titleLower.includes('expertise') || titleLower.includes('technical')) {
       return {
         title: section.title,
         type: 'skills',
         categories: this.parseSkillCategories(section.content)
       };
-    } else {
-      // Default to paragraph
+    } else if (titleLower.includes('education') || titleLower.includes('academic')) {
+      return {
+        title: section.title,
+        type: 'education',
+        items: this.parseEducationItems(section.content)
+      };
+    } else if (titleLower.includes('experience') || titleLower.includes('employment') || 
+               titleLower.includes('work') || titleLower.includes('project')) {
+      return {
+        title: section.title,
+        type: 'experience',
+        items: this.parseExperienceItems(section.content)
+      };
+    } else if (titleLower.includes('certification') || titleLower.includes('award') || 
+               titleLower.includes('publication') || this.isListSection(content)) {
+      return {
+        title: section.title,
+        type: 'list',
+        items: this.parseListItems(section.content)
+      };
+    } else if (titleLower.includes('summary') || titleLower.includes('objective') || 
+               titleLower.includes('profile') || titleLower.includes('about')) {
       return {
         title: section.title,
         type: 'paragraph',
         content: content
       };
+    } else {
+      // Fallback to content-based detection
+      if (this.isSkillsSection(content)) {
+        return {
+          title: section.title,
+          type: 'skills',
+          categories: this.parseSkillCategories(section.content)
+        };
+      } else if (this.isEducationSection(content)) {
+        return {
+          title: section.title,
+          type: 'education',
+          items: this.parseEducationItems(section.content)
+        };
+      } else if (this.isExperienceSection(content)) {
+        return {
+          title: section.title,
+          type: 'experience',
+          items: this.parseExperienceItems(section.content)
+        };
+      } else if (this.isListSection(content)) {
+        return {
+          title: section.title,
+          type: 'list',
+          items: this.parseListItems(section.content)
+        };
+      } else {
+        return {
+          title: section.title,
+          type: 'paragraph',
+          content: content
+        };
+      }
     }
   }
 
@@ -645,7 +711,11 @@ class ResumeEditorSupabaseService {
   }
 
   isExperienceSection(content) {
-    return content.match(/\d{4}/) && (content.includes('present') || content.includes('current'));
+    const lower = content.toLowerCase();
+    return lower.includes('experience') || 
+           lower.includes('employment') || 
+           lower.includes('work history') ||
+           (content.match(/\d{4}/) && (lower.includes('present') || lower.includes('current')));
   }
 
   isEducationSection(content) {
@@ -665,39 +735,120 @@ class ResumeEditorSupabaseService {
   parseExperienceItems(lines) {
     const items = [];
     let currentItem = null;
+    let expectingDate = false;
+    let expectingLocation = false;
     
-    lines.forEach(line => {
-      if (!line.trim()) return;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
       
-      // New item (has dates or looks like title)
-      if (line.match(/\d{4}/) || (!currentItem && !line.startsWith('•'))) {
-        if (currentItem) items.push(currentItem);
+      // Check if this line is a job title (not starting with bullet, not a date)
+      const isDate = line.match(/\b(\d{4}|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Present|Current)\b/i);
+      const isBullet = line.startsWith('•') || line.startsWith('-');
+      const isLocation = line.match(/,\s*[A-Z]{2}$/);
+      
+      if (!isBullet && !currentItem) {
+        // Start new item with title
         currentItem = {
           title: line,
           description: []
         };
-      } else if (currentItem) {
-        if (line.startsWith('•')) {
-          currentItem.description.push(line.replace(/^[•\-*]\s*/, '').trim());
-        } else if (!currentItem.organization) {
-          currentItem.organization = line;
-        } else if (!currentItem.dateRange && line.match(/\d{4}/)) {
-          currentItem.dateRange = line;
-        }
+        expectingDate = true;
+      } else if (!isBullet && expectingDate && isDate) {
+        // This is the date line
+        currentItem.dateRange = line;
+        expectingDate = false;
+        expectingLocation = true;
+      } else if (!isBullet && !currentItem.organization && !isDate) {
+        // This is the organization
+        currentItem.organization = line;
+        if (!currentItem.dateRange) expectingDate = true;
+      } else if (!isBullet && expectingLocation && isLocation) {
+        // This is the location
+        currentItem.location = line;
+        expectingLocation = false;
+      } else if (isBullet && currentItem) {
+        // This is a bullet point
+        currentItem.description.push(line.replace(/^[•\-*]\s*/, '').trim());
+      } else if (!isBullet && currentItem && currentItem.description.length > 0) {
+        // New item starting
+        items.push(currentItem);
+        currentItem = {
+          title: line,
+          description: []
+        };
+        expectingDate = true;
+        expectingLocation = false;
       }
-    });
+    }
     
     if (currentItem) items.push(currentItem);
     return items;
   }
 
   parseEducationItems(lines) {
-    return this.parseExperienceItems(lines).map(item => ({
-      degree: item.title,
-      institution: item.organization,
-      date: item.dateRange,
-      details: item.description
-    }));
+    const items = [];
+    let currentItem = null;
+    let expectingDegree = false;
+    let expectingDate = false;
+    let expectingLocation = false;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      
+      const isDate = line.match(/\b(\d{4}|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/i);
+      const isDegree = line.match(/\b(Bachelor|Master|PhD|Ph\.D|Associate|Degree|B\.S\.|B\.A\.|M\.S\.|M\.A\.|MBA)\b/i);
+      const isLocation = line.match(/,\s*[A-Z]{2}$/);
+      
+      if (!currentItem) {
+        // First line is usually institution
+        currentItem = {
+          institution: line,
+          details: []
+        };
+        expectingDegree = true;
+      } else if (expectingDegree && isDegree) {
+        // This is the degree line
+        currentItem.degree = line;
+        expectingDegree = false;
+        expectingDate = true;
+      } else if (expectingDate && isDate) {
+        // This is the date
+        currentItem.date = line;
+        expectingDate = false;
+        expectingLocation = true;
+      } else if (expectingLocation && isLocation) {
+        // This is the location
+        currentItem.location = line;
+        expectingLocation = false;
+      } else if (!isDegree && !isDate && !isLocation) {
+        // Check if this is a new institution (no bullets in education usually)
+        if (currentItem.degree && currentItem.date) {
+          // Previous item is complete, start new one
+          items.push(currentItem);
+          currentItem = {
+            institution: line,
+            details: []
+          };
+          expectingDegree = true;
+          expectingDate = false;
+          expectingLocation = false;
+        } else if (!currentItem.degree) {
+          // Still building current item
+          currentItem.degree = line;
+          expectingDate = true;
+        } else if (!currentItem.date) {
+          currentItem.date = line;
+          expectingLocation = true;
+        } else if (!currentItem.location) {
+          currentItem.location = line;
+        }
+      }
+    }
+    
+    if (currentItem) items.push(currentItem);
+    return items;
   }
 
   parseSkillCategories(lines) {
