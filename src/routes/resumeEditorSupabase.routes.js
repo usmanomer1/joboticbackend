@@ -76,10 +76,10 @@ router.post('/parse-for-edit',
       res.json({
         success: true,
         data: {
-          resumeId: result.resumeId,
+          sessionId: result.sessionId,
           pdfUrl: result.pdfUrl,
-          schema: result.schema,
-          sections: result.sections
+          editSchema: result.editSchema,
+          matchData: result.matchData
         }
       });
     } catch (error) {
