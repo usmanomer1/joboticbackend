@@ -397,43 +397,95 @@ class ResumeEditorSupabaseService {
   }
 
   /**
-   * Update a section in Supabase
+   * Update a section using sessionId (which is the resume ID)
    */
-  async updateSection(userId, sectionId, data) {
-    // Get current resume data
+  async updateSection(sessionId, sectionId, data, jobId = null) {
+    // Get current resume data using sessionId
     const { data: resumeData, error: fetchError } = await supabase
       .from('resume_data')
       .select('*')
-      .eq('user_id', userId)
+      .eq('id', sessionId)
       .single();
     
-    if (!resumeData) throw new AppError('Resume not found', 404);
+    if (!resumeData) throw new AppError('Session not found', 404);
     
-    // Update the specific section
-    const updatedSections = {
-      ...resumeData.sections,
-      [sectionId]: data
-    };
+    // Update the specific section based on its type
+    const updatedSections = { ...resumeData.sections };
+    const section = updatedSections[sectionId];
     
-    // Update in database
+    if (!section && sectionId !== 'personal') throw new AppError('Section not found', 404);
+    
+    // Handle different section types
+    if (sectionId === 'personal') {
+      // Update personal info fields
+      updatedSections.personalInfo = {
+        ...updatedSections.personalInfo,
+        name: data.fullName || updatedSections.personalInfo.name,
+        title: data.title || updatedSections.personalInfo.title,
+        email: data.email || updatedSections.personalInfo.email,
+        phone: data.phone || updatedSections.personalInfo.phone,
+        location: data.location || updatedSections.personalInfo.location,
+        linkedin: data.linkedin || updatedSections.personalInfo.linkedin,
+        github: data.github || updatedSections.personalInfo.github,
+        website: data.website || updatedSections.personalInfo.website
+      };
+    } else if (section.type === 'skills') {
+      // Update skills with new grouped format
+      const categories = [];
+      Object.entries(data).forEach(([categoryKey, skills]) => {
+        const categoryName = categoryKey.charAt(0).toUpperCase() + categoryKey.slice(1);
+        if (skills && skills.length > 0) {
+          categories.push({
+            name: categoryName,
+            skills: skills.join(', ')
+          });
+        }
+      });
+      updatedSections[sectionId] = {
+        ...section,
+        categories: categories
+      };
+    } else if (section.type === 'experience' || section.type === 'education') {
+      // Update experience/education entries
+      updatedSections[sectionId] = {
+        ...section,
+        items: data.entries || section.items
+      };
+    } else if (section.type === 'list') {
+      // Update list items
+      updatedSections[sectionId] = {
+        ...section,
+        items: data.items || section.items
+      };
+    } else {
+      // Update paragraph content
+      updatedSections[sectionId] = {
+        ...section,
+        content: data.value || section.content
+      };
+    }
+    
+    // Update in database with timestamp
     const { error: updateError } = await supabase
       .from('resume_data')
       .update({
         sections: updatedSections,
-        resume_text: this.sectionsToText(updatedSections)
+        schema: this.generateEditSchema(updatedSections),
+        resume_text: this.sectionsToText(updatedSections),
+        last_edited_at: new Date().toISOString()
       })
-      .eq('id', resumeData.id);
+      .eq('id', sessionId);
     
     if (updateError) throw new AppError('Failed to update section', 500);
     
     // Generate new PDF and upload
-    const pdfUrl = await this.generateAndUploadPdf(userId, updatedSections);
+    const pdfUrl = await this.generateAndUploadPdf(resumeData.user_id, updatedSections);
     
     // Update PDF URL
     await supabase
       .from('resume_data')
       .update({ pdf_url: pdfUrl })
-      .eq('id', resumeData.id);
+      .eq('id', sessionId);
     
     // Also update the profile table's resume_text
     await supabase
@@ -442,9 +494,20 @@ class ResumeEditorSupabaseService {
         resume_text: this.sectionsToText(updatedSections),
         updated_at: new Date().toISOString()
       })
-      .eq('user_id', userId);
+      .eq('user_id', resumeData.user_id);
     
-    return { pdfUrl };
+    // Calculate new match score if jobId provided
+    let newScore = null;
+    if (jobId) {
+      const matchData = await this.calculateMatchData(updatedSections, jobId);
+      newScore = matchData ? matchData.currentScore : null;
+    }
+    
+    return { 
+      newPdfUrl: pdfUrl,
+      status: 'success',
+      newScore: newScore
+    };
   }
 
   /**
@@ -905,6 +968,89 @@ class ResumeEditorSupabaseService {
     
     return text.trim();
   }
+
+  /**
+   * Cleanup old sessions (resumes not edited in the last hour)
+   * This should be run periodically (e.g., every hour via cron job or scheduled function)
+   */
+  async cleanupOldSessions() {
+    try {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      
+      // Delete old resume data that hasn't been edited in the last hour
+      // Only delete if user doesn't have a profile (temporary sessions)
+      const { data: deletedRecords, error } = await supabase
+        .from('resume_data')
+        .delete()
+        .lt('last_edited_at', oneHourAgo)
+        .is('profile_id', null)
+        .select('id, pdf_url, docx_url');
+      
+      if (error) {
+        console.error('Error cleaning up old sessions:', error);
+        return;
+      }
+      
+      // Clean up associated files from storage
+      if (deletedRecords && deletedRecords.length > 0) {
+        console.log(`Cleaning up ${deletedRecords.length} old sessions`);
+        
+        for (const record of deletedRecords) {
+          // Extract file paths from URLs and delete from storage
+          if (record.pdf_url) {
+            const pdfPath = this.extractStoragePath(record.pdf_url);
+            if (pdfPath) {
+              await supabase.storage.from('resumes').remove([pdfPath]);
+            }
+          }
+          if (record.docx_url) {
+            const docxPath = this.extractStoragePath(record.docx_url);
+            if (docxPath) {
+              await supabase.storage.from('resumes').remove([docxPath]);
+            }
+          }
+        }
+      }
+      
+      return deletedRecords?.length || 0;
+    } catch (error) {
+      console.error('Session cleanup error:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Extract storage path from Supabase URL
+   */
+  extractStoragePath(url) {
+    try {
+      const urlObj = new URL(url);
+      const pathParts = urlObj.pathname.split('/');
+      const bucketIndex = pathParts.findIndex(p => p === 'resumes');
+      if (bucketIndex !== -1 && bucketIndex < pathParts.length - 1) {
+        return pathParts.slice(bucketIndex + 1).join('/');
+      }
+      return null;
+    } catch (error) {
+      return null;
+    }
+  }
 }
 
-module.exports = new ResumeEditorSupabaseService();
+// Create instance
+const resumeEditorService = new ResumeEditorSupabaseService();
+
+// Set up cleanup job to run every hour
+if (process.env.NODE_ENV !== 'test') {
+  setInterval(() => {
+    resumeEditorService.cleanupOldSessions()
+      .then(count => {
+        if (count > 0) {
+          console.log(`Cleaned up ${count} old resume sessions`);
+        }
+      })
+      .catch(err => console.error('Cleanup job error:', err));
+  }, 60 * 60 * 1000); // Run every hour
+}
+
+module.exports = resumeEditorService;

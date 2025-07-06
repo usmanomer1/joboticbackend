@@ -29,9 +29,9 @@ const resumeEditorValidators = {
       .withMessage('Job ID must be a string')
   ],
   updateSection: [
-    body('userId')
+    body('sessionId')
       .isUUID()
-      .withMessage('Valid user ID is required'),
+      .withMessage('Valid session ID is required'),
     body('sectionId')
       .isString()
       .trim()
@@ -39,7 +39,12 @@ const resumeEditorValidators = {
       .withMessage('Section ID is required'),
     body('data')
       .isObject()
-      .withMessage('Section data must be an object')
+      .withMessage('Section data must be an object'),
+    body('jobId')
+      .optional()
+      .isString()
+      .trim()
+      .withMessage('Job ID must be a string')
   ],
   finalize: [
     body('userId')
@@ -97,20 +102,16 @@ router.post('/parse-for-edit',
 router.post('/update-section',
   validate(resumeEditorValidators.updateSection),
   asyncHandler(async (req, res) => {
-    const { userId, sectionId, data } = req.body;
+    const { sessionId, sectionId, data, jobId } = req.body;
     
-    console.log(`Updating section ${sectionId} for user ${userId}`);
+    console.log(`Updating section ${sectionId} for session ${sessionId}`);
     
     try {
-      const result = await resumeEditorService.updateSection(userId, sectionId, data);
+      const result = await resumeEditorService.updateSection(sessionId, sectionId, data, jobId);
       
       res.json({
         success: true,
-        data: {
-          pdfUrl: result.pdfUrl,
-          updated: true,
-          sectionId
-        }
+        data: result
       });
     } catch (error) {
       if (error.statusCode === 404) throw error;
