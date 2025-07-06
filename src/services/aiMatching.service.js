@@ -170,10 +170,32 @@ class AIMatchingService {
         // Exponential backoff
         const delay = MATCH_CONFIG.RETRY_DELAY * Math.pow(2, MATCH_CONFIG.MAX_RETRIES - retries);
         await sleep(delay);
+        
+        // If it's a JSON error, try with a smaller batch
+        if (error.message.includes('JSON') && batch.length > 5) {
+          console.log('Retrying with smaller batch size...');
+          const halfBatch1 = batch.slice(0, Math.ceil(batch.length / 2));
+          const halfBatch2 = batch.slice(Math.ceil(batch.length / 2));
+          
+          const results1 = await this.processBatch(halfBatch1, resumeText, retries - 1);
+          const results2 = await this.processBatch(halfBatch2, resumeText, retries - 1);
+          
+          return [...results1, ...results2];
+        }
+        
         return this.processBatch(batch, resumeText, retries - 1);
       }
       
-      throw error;
+      // Return default scores for this batch if all retries failed
+      console.error('All retries failed, returning default scores');
+      return batch.map(job => ({
+        jobId: job.job_id,
+        score: 0,
+        matchLabel: 'ERROR',
+        matchReasons: ['Unable to process job match due to technical error'],
+        missingSkills: [],
+        keyStrengths: []
+      }));
     }
   }
   

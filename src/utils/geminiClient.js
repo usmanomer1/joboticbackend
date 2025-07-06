@@ -173,13 +173,46 @@ const generateJSON = async (prompt, options = {}) => {
       cleanedResponse = cleanedResponse.slice(0, -3);
     }
     
-    // Parse JSON
+    // Parse JSON with error recovery
     try {
       const jsonData = JSON.parse(cleanedResponse.trim());
       return jsonData;
     } catch (parseError) {
-      console.error('Failed to parse AI JSON response:', cleanedResponse);
-      throw new AppError('Invalid JSON response from AI', 500);
+      console.error('Initial JSON parse failed, attempting to fix...');
+      
+      // Try to fix common JSON issues
+      let fixedJson = cleanedResponse.trim();
+      
+      // Remove trailing commas before closing brackets/braces
+      fixedJson = fixedJson.replace(/,(\s*[}\]])/g, '$1');
+      
+      // Fix unclosed strings
+      const lines = fixedJson.split('\n');
+      const lastLine = lines[lines.length - 1];
+      if (lastLine.includes('"') && (lastLine.match(/"/g) || []).length % 2 === 1) {
+        fixedJson += '"';
+      }
+      
+      // Balance brackets and braces
+      const openBrackets = (fixedJson.match(/\[/g) || []).length;
+      const closeBrackets = (fixedJson.match(/\]/g) || []).length;
+      const openBraces = (fixedJson.match(/\{/g) || []).length;
+      const closeBraces = (fixedJson.match(/\}/g) || []).length;
+      
+      // Add missing closing brackets/braces
+      fixedJson += ']'.repeat(Math.max(0, openBrackets - closeBrackets));
+      fixedJson += '}'.repeat(Math.max(0, openBraces - closeBraces));
+      
+      // Try parsing the fixed JSON
+      try {
+        const jsonData = JSON.parse(fixedJson);
+        console.log('Successfully recovered JSON after fixes');
+        return jsonData;
+      } catch (secondError) {
+        console.error('JSON recovery failed');
+        console.error('Raw response (first 1000 chars):', cleanedResponse.substring(0, 1000));
+        throw new AppError('Invalid JSON response from AI - please try again', 500);
+      }
     }
   } catch (error) {
     console.error('Gemini JSON generation error:', error);
