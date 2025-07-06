@@ -23,8 +23,8 @@ class ResumeEditorSupabaseService {
     // Dynamically parse resume into sections
     const parsedData = this.intelligentParse(resumeText);
     
-    // Generate schema based on what we found
-    const schema = this.generateDynamicSchema(parsedData.sections);
+    // Generate frontend-friendly edit schema
+    const editSchema = this.generateEditSchema(parsedData.sections);
     
     // Check if user already has resume data
     const { data: existingResume, error: fetchError } = await supabase
@@ -41,7 +41,7 @@ class ResumeEditorSupabaseService {
         .from('resume_data')
         .update({
           sections: parsedData.sections,
-          schema: schema,
+          schema: editSchema,
           resume_text: resumeText,
           last_edited_at: new Date().toISOString()
         })
@@ -66,7 +66,7 @@ class ResumeEditorSupabaseService {
           user_id: userId,
           profile_id: profile?.id,
           sections: parsedData.sections,
-          schema: schema,
+          schema: editSchema,
           resume_text: resumeText
         })
         .select()
@@ -85,11 +85,17 @@ class ResumeEditorSupabaseService {
       .update({ pdf_url: pdfUrl })
       .eq('id', resumeData.id);
     
+    // Get match data if jobId provided
+    let matchData = null;
+    if (jobId) {
+      matchData = await this.calculateMatchData(parsedData.sections, jobId);
+    }
+    
     return {
-      resumeId: resumeData.id,
-      sections: parsedData.sections,
-      schema: schema,
-      pdfUrl: pdfUrl
+      sessionId: resumeData.id,
+      pdfUrl: pdfUrl,
+      editSchema: editSchema,
+      matchData: matchData
     };
   }
 
@@ -284,75 +290,110 @@ class ResumeEditorSupabaseService {
   }
 
   /**
-   * Generate dynamic schema based on detected sections
+   * Generate frontend-friendly edit schema
    */
-  generateDynamicSchema(sections) {
-    const schema = {};
+  generateEditSchema(sections) {
+    const schemaSections = [];
     
+    // Personal Information Section
+    if (sections.personalInfo) {
+      const personal = sections.personalInfo;
+      schemaSections.push({
+        id: 'personal',
+        title: 'Personal Information',
+        type: 'single',
+        fields: [
+          { name: 'fullName', type: 'text', value: personal.name || '', label: 'Full Name' },
+          { name: 'title', type: 'text', value: personal.title || '', label: 'Professional Title' },
+          { name: 'email', type: 'email', value: personal.email || '', label: 'Email' },
+          { name: 'phone', type: 'tel', value: personal.phone || '', label: 'Phone' },
+          { name: 'location', type: 'text', value: personal.location || '', label: 'Location' },
+          { name: 'linkedin', type: 'url', value: personal.linkedin || '', label: 'LinkedIn' },
+          { name: 'github', type: 'url', value: personal.github || '', label: 'GitHub' },
+          { name: 'website', type: 'url', value: personal.website || '', label: 'Website' }
+        ]
+      });
+    }
+    
+    // Process other sections dynamically
     Object.entries(sections).forEach(([key, section]) => {
-      if (key === 'personalInfo') {
-        schema[key] = {
-          title: 'Personal Information',
-          fields: {
-            name: { type: 'text', label: 'Full Name' },
-            title: { type: 'text', label: 'Professional Title' },
-            email: { type: 'email', label: 'Email' },
-            phone: { type: 'tel', label: 'Phone' },
-            location: { type: 'text', label: 'Location' },
-            linkedin: { type: 'url', label: 'LinkedIn' },
-            github: { type: 'url', label: 'GitHub' },
-            website: { type: 'url', label: 'Website' }
-          }
-        };
-      } else if (section.type === 'list') {
-        schema[key] = {
+      if (key === 'personalInfo') return;
+      
+      if (section.type === 'skills') {
+        // Skills section with grouped categories
+        const groups = section.categories.map(cat => ({
+          name: cat.name.toLowerCase().replace(/\s+/g, '_'),
+          label: cat.name,
+          values: cat.skills.split(',').map(s => s.trim()).filter(Boolean),
+          type: 'tags'
+        }));
+        
+        schemaSections.push({
+          id: key,
           title: section.title,
-          type: 'array',
-          itemType: 'text'
-        };
+          type: 'grouped',
+          groups: groups
+        });
       } else if (section.type === 'experience') {
-        schema[key] = {
+        // Experience section with multiple entries
+        const entries = section.items.map((item, index) => ({
+          id: `${key}-${index}`,
+          fields: [
+            { name: 'company', type: 'text', value: item.organization || '', label: 'Company' },
+            { name: 'position', type: 'text', value: item.title || '', label: 'Position' },
+            { name: 'duration', type: 'text', value: item.dateRange || '', label: 'Duration' },
+            { name: 'location', type: 'text', value: item.location || '', label: 'Location' },
+            { name: 'bullets', type: 'bullets', value: item.description || [], label: 'Responsibilities' }
+          ]
+        }));
+        
+        schemaSections.push({
+          id: key,
           title: section.title,
-          type: 'array',
-          itemSchema: {
-            title: { type: 'text', label: 'Position' },
-            organization: { type: 'text', label: 'Company/Organization' },
-            location: { type: 'text', label: 'Location' },
-            dateRange: { type: 'text', label: 'Date Range' },
-            description: { type: 'array', label: 'Description', itemType: 'text' }
-          }
-        };
+          type: 'multiple',
+          entries: entries
+        });
       } else if (section.type === 'education') {
-        schema[key] = {
+        // Education section with multiple entries
+        const entries = section.items.map((item, index) => ({
+          id: `${key}-${index}`,
+          fields: [
+            { name: 'degree', type: 'text', value: item.degree || '', label: 'Degree' },
+            { name: 'institution', type: 'text', value: item.institution || '', label: 'Institution' },
+            { name: 'duration', type: 'text', value: item.date || '', label: 'Graduation Date' },
+            { name: 'location', type: 'text', value: item.location || '', label: 'Location' },
+            { name: 'bullets', type: 'bullets', value: item.details || [], label: 'Details' }
+          ]
+        }));
+        
+        schemaSections.push({
+          id: key,
           title: section.title,
-          type: 'array',
-          itemSchema: {
-            degree: { type: 'text', label: 'Degree/Certification' },
-            institution: { type: 'text', label: 'Institution' },
-            location: { type: 'text', label: 'Location' },
-            date: { type: 'text', label: 'Date' },
-            details: { type: 'array', label: 'Additional Details', itemType: 'text' }
-          }
-        };
-      } else if (section.type === 'skills') {
-        schema[key] = {
+          type: 'multiple',
+          entries: entries
+        });
+      } else if (section.type === 'list') {
+        // List sections (like certifications, awards)
+        schemaSections.push({
+          id: key,
           title: section.title,
-          type: 'skillCategories',
-          categorySchema: {
-            name: { type: 'text', label: 'Category' },
-            skills: { type: 'text', label: 'Skills (comma separated)' }
-          }
-        };
+          type: 'list',
+          items: section.items || []
+        });
       } else {
-        schema[key] = {
+        // Paragraph sections (like summary, objective)
+        schemaSections.push({
+          id: key,
           title: section.title,
-          type: 'textarea',
-          label: section.title
-        };
+          type: 'paragraph',
+          value: section.content || ''
+        });
       }
     });
     
-    return schema;
+    return {
+      sections: schemaSections
+    };
   }
 
   /**
@@ -572,9 +613,26 @@ class ResumeEditorSupabaseService {
       
       const colonIndex = line.indexOf(':');
       if (colonIndex > 0) {
+        const categoryName = line.substring(0, colonIndex).trim();
+        const skillsText = line.substring(colonIndex + 1).trim();
+        
+        // Detect common skill categories
+        let normalizedName = categoryName;
+        if (categoryName.toLowerCase().includes('language') || categoryName.toLowerCase().includes('programming')) {
+          normalizedName = 'Languages';
+        } else if (categoryName.toLowerCase().includes('framework') || categoryName.toLowerCase().includes('library')) {
+          normalizedName = 'Frameworks';
+        } else if (categoryName.toLowerCase().includes('tool') || categoryName.toLowerCase().includes('software')) {
+          normalizedName = 'Tools';
+        } else if (categoryName.toLowerCase().includes('database') || categoryName.toLowerCase().includes('data')) {
+          normalizedName = 'Databases';
+        } else if (categoryName.toLowerCase().includes('cloud') || categoryName.toLowerCase().includes('platform')) {
+          normalizedName = 'Cloud/Platforms';
+        }
+        
         categories.push({
-          name: line.substring(0, colonIndex).trim(),
-          skills: line.substring(colonIndex + 1).trim()
+          name: normalizedName,
+          skills: skillsText
         });
       }
     });
@@ -730,6 +788,122 @@ class ResumeEditorSupabaseService {
       .eq('id', resumeData.id);
     
     return { pdfUrl, sections: reorderedSections };
+  }
+
+  /**
+   * Calculate match data for job comparison
+   */
+  async calculateMatchData(sections, jobId) {
+    try {
+      // Get job details from database or external API
+      // For now, returning mock data - integrate with your job matching service
+      const skills = this.extractAllSkills(sections);
+      
+      return {
+        currentScore: 7.5,
+        urgent: 2,
+        critical: 1,
+        optional: 3,
+        missingSkills: ['Docker', 'Kubernetes', 'AWS'],
+        matchedSkills: skills.slice(0, 5),
+        recommendations: [
+          'Add more cloud experience',
+          'Include DevOps projects'
+        ]
+      };
+    } catch (error) {
+      console.error('Error calculating match data:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Extract all skills from resume sections
+   */
+  extractAllSkills(sections) {
+    const skills = [];
+    
+    Object.values(sections).forEach(section => {
+      if (section.type === 'skills' && section.categories) {
+        section.categories.forEach(cat => {
+          const categorySkills = cat.skills.split(',').map(s => s.trim()).filter(Boolean);
+          skills.push(...categorySkills);
+        });
+      }
+    });
+    
+    return skills;
+  }
+
+  /**
+   * Generate and upload PDF to Supabase
+   */
+  async generateAndUploadPdf(userId, sections) {
+    try {
+      // Use the PDF generator service
+      const pdfUrl = await pdfGenerator.generatePDF({ sections }, userId);
+      return pdfUrl;
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      throw new AppError('Failed to generate PDF', 500);
+    }
+  }
+
+  /**
+   * Convert sections back to text format
+   */
+  sectionsToText(sections) {
+    let text = '';
+    
+    // Personal info first
+    if (sections.personalInfo) {
+      const info = sections.personalInfo;
+      if (info.name) text += `${info.name}\n`;
+      if (info.title) text += `${info.title}\n`;
+      if (info.email) text += `${info.email}\n`;
+      if (info.phone) text += `${info.phone}\n`;
+      if (info.location) text += `${info.location}\n`;
+      if (info.linkedin) text += `${info.linkedin}\n`;
+      if (info.github) text += `${info.github}\n`;
+      text += '\n';
+    }
+    
+    // Other sections
+    Object.entries(sections).forEach(([key, section]) => {
+      if (key === 'personalInfo') return;
+      
+      text += `${section.title}\n`;
+      text += '='.repeat(section.title.length) + '\n';
+      
+      if (section.type === 'paragraph') {
+        text += `${section.content}\n`;
+      } else if (section.type === 'list') {
+        section.items.forEach(item => {
+          text += `• ${item}\n`;
+        });
+      } else if (section.type === 'experience' || section.type === 'education') {
+        section.items.forEach(item => {
+          if (item.title || item.degree) text += `${item.title || item.degree}\n`;
+          if (item.organization || item.institution) text += `${item.organization || item.institution}\n`;
+          if (item.dateRange || item.date) text += `${item.dateRange || item.date}\n`;
+          if (item.location) text += `${item.location}\n`;
+          if (item.description || item.details) {
+            (item.description || item.details).forEach(desc => {
+              text += `• ${desc}\n`;
+            });
+          }
+          text += '\n';
+        });
+      } else if (section.type === 'skills') {
+        section.categories.forEach(cat => {
+          text += `${cat.name}: ${cat.skills}\n`;
+        });
+      }
+      
+      text += '\n';
+    });
+    
+    return text.trim();
   }
 }
 
