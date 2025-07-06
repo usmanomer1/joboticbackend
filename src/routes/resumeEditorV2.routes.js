@@ -123,8 +123,8 @@ router.get('/session/:sessionId',
       res.json({
         success: true,
         data: {
-          editSchema: data.edit_schema,
-          currentText: data.current_text,
+          editSchema: data.schema,
+          currentText: data.resume_text,
           pdfUrl: data.pdf_url,
           sections: data.sections
         }

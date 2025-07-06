@@ -32,25 +32,50 @@ class ResumeEditorV2Service {
       
       // Store in Supabase
       const sessionId = uuidv4();
+      console.log('Attempting to save to Supabase...');
+      console.log('Session ID:', sessionId);
+      console.log('User ID:', userId);
+      console.log('Sections count:', sections.length);
+      console.log('Schema sections:', editSchema.length);
+      
+      const insertData = {
+        id: sessionId,
+        user_id: userId,
+        resume_text: resumeText,  // Changed from original_text
+        sections: sections,
+        schema: editSchema,  // Changed from edit_schema
+        created_at: new Date().toISOString(),
+        last_edited_at: new Date().toISOString()
+      };
+      
+      console.log('Insert data size:', JSON.stringify(insertData).length, 'bytes');
+      
       const { data: resumeData, error } = await supabase
         .from('resume_data')
-        .insert({
-          id: sessionId,
-          user_id: userId,
-          original_text: resumeText,
-          current_text: resumeText,
-          sections: sections,
-          edit_schema: editSchema,
-          job_description: jobDescription,
-          created_at: new Date().toISOString(),
-          last_edited_at: new Date().toISOString()
-        })
+        .insert(insertData)
         .select()
         .single();
       
       if (error) {
-        console.error('Supabase error:', error);
-        throw new AppError('Failed to save resume data', 500);
+        console.error('=== SUPABASE ERROR ===');
+        console.error('Error code:', error.code);
+        console.error('Error message:', error.message);
+        console.error('Error details:', error.details);
+        console.error('Error hint:', error.hint);
+        console.error('Full error:', JSON.stringify(error, null, 2));
+        
+        // Check specific error types
+        if (error.code === '42P01') {
+          throw new AppError('Database table does not exist', 500);
+        } else if (error.code === '23505') {
+          throw new AppError('Duplicate entry - this session already exists', 500);
+        } else if (error.code === '22P02') {
+          throw new AppError('Invalid data format', 500);
+        } else if (error.message?.includes('JWT')) {
+          throw new AppError('Authentication error with database', 500);
+        }
+        
+        throw new AppError(`Failed to save resume data: ${error.message}`, 500);
       }
       
       // Generate initial PDF
