@@ -71,15 +71,23 @@ class ResumeEditorSupabaseService {
       }
       
       // Create new resume data
+      const insertData = {
+        user_id: userId,
+        sections: parsedData.sections,
+        schema: editSchema,
+        resume_text: resumeText
+      };
+      
+      // Only add profile_id if it exists
+      if (profile?.id) {
+        insertData.profile_id = profile.id;
+      }
+      
+      console.log('Attempting to insert resume data for user:', userId);
+      
       const { data, error } = await supabase
         .from('resume_data')
-        .insert({
-          user_id: userId,
-          profile_id: profile?.id,
-          sections: parsedData.sections,
-          schema: editSchema,
-          resume_text: resumeText
-        })
+        .insert(insertData)
         .select()
         .single();
         
