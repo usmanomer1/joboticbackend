@@ -133,7 +133,7 @@ class PdfGeneratorService {
   }
 
   /**
-   * Generate professional HTML for resume
+   * Generate professional HTML for resume matching Jake's LaTeX format
    */
   generateHTML(resumeData) {
     const { sections } = resumeData;
@@ -144,7 +144,8 @@ class PdfGeneratorService {
 <head>
   <meta charset="UTF-8">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    /* Use Computer Modern or similar serif font to match LaTeX */
+    @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;500;600;700&family=Source+Sans+Pro:wght@400;600;700&display=swap');
     
     * {
       margin: 0;
@@ -153,10 +154,10 @@ class PdfGeneratorService {
     }
     
     body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      font-size: 10.5pt;
-      line-height: 1.5;
-      color: #1a1a1a;
+      font-family: 'Computer Modern', 'EB Garamond', 'Times New Roman', serif;
+      font-size: 11pt;
+      line-height: 1.3;
+      color: #000;
       background: white;
     }
     
@@ -166,107 +167,106 @@ class PdfGeneratorService {
       padding: 0.5in;
     }
     
-    /* Header Styles */
+    /* Header Styles - Centered like Jake's */
     .header {
       text-align: center;
-      margin-bottom: 20px;
+      margin-bottom: 0.3in;
     }
     
     .name {
-      font-size: 24pt;
+      font-size: 20pt;
       font-weight: 700;
       color: #000;
+      text-transform: uppercase;
+      letter-spacing: 3px;
       margin-bottom: 5px;
-      letter-spacing: 0.5px;
     }
     
-    .title {
-      font-size: 14pt;
-      font-weight: 500;
-      color: #333;
-      margin-bottom: 8px;
-    }
-    
-    .contact-info {
+    .contact-line {
       font-size: 10pt;
-      color: #555;
-      margin-bottom: 4px;
+      color: #000;
+      margin-top: 3px;
     }
     
-    .contact-info a {
-      color: #555;
-      text-decoration: none;
+    .contact-line a {
+      color: #000;
+      text-decoration: underline;
     }
     
-    /* Section Styles */
+    .pipe {
+      margin: 0 0.5em;
+    }
+    
+    /* Section Styles - ALL CAPS with underline */
     .section {
-      margin-bottom: 20px;
+      margin-bottom: 0.15in;
+      margin-top: 0.15in;
     }
     
     .section-header {
       font-size: 12pt;
-      font-weight: 700;
+      font-weight: 400;
       color: #000;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 8px;
-      padding-bottom: 4px;
-      border-bottom: 1.5px solid #000;
-    }
-    
-    /* Content Styles */
-    .paragraph {
-      margin-bottom: 10px;
-      text-align: justify;
-      color: #333;
-    }
-    
-    .experience-item, .education-item {
-      margin-bottom: 15px;
-    }
-    
-    .item-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: baseline;
       margin-bottom: 4px;
+      padding-bottom: 1px;
+      border-bottom: 0.5pt solid #000;
+      font-variant: small-caps;
+      letter-spacing: 1px;
+    }
+    
+    /* Experience/Education Item Styles - Two column layout */
+    .item-row {
+      display: table;
+      width: 100%;
+      margin-bottom: 2pt;
+    }
+    
+    .item-left {
+      display: table-cell;
+      vertical-align: top;
+      width: 75%;
+    }
+    
+    .item-right {
+      display: table-cell;
+      vertical-align: top;
+      width: 25%;
+      text-align: right;
+      font-size: 10pt;
     }
     
     .item-title {
-      font-weight: 600;
+      font-weight: 700;
       font-size: 11pt;
+      color: #000;
+    }
+    
+    .item-subtitle {
+      font-size: 10pt;
+      font-style: italic;
       color: #000;
     }
     
     .item-date {
       font-size: 10pt;
-      color: #555;
-      white-space: nowrap;
-    }
-    
-    .item-subtitle {
-      font-size: 10.5pt;
-      color: #333;
       font-style: italic;
-      margin-bottom: 6px;
+      color: #000;
     }
     
-    .item-location {
-      font-size: 10pt;
-      color: #666;
-      margin-bottom: 6px;
-    }
-    
-    /* Bullet Points */
+    /* Bullet Points - Smaller and tighter */
     .bullet-list {
-      margin-left: 15px;
+      margin-left: 0.2in;
+      margin-top: 2pt;
+      margin-bottom: 8pt;
     }
     
     .bullet-item {
-      margin-bottom: 4px;
-      color: #333;
+      margin-bottom: 2pt;
+      color: #000;
+      font-size: 10pt;
       position: relative;
-      padding-left: 15px;
+      padding-left: 0.15in;
+      text-align: left;
     }
     
     .bullet-item:before {
@@ -276,34 +276,73 @@ class PdfGeneratorService {
       color: #000;
     }
     
-    /* Skills Section */
+    /* Projects Section - Special formatting */
+    .project-item {
+      margin-bottom: 8pt;
+    }
+    
+    .project-header {
+      display: table;
+      width: 100%;
+      margin-bottom: 2pt;
+    }
+    
+    .project-title {
+      display: table-cell;
+      font-weight: 700;
+      font-size: 10pt;
+      vertical-align: top;
+    }
+    
+    .project-tech {
+      font-weight: 400;
+      font-style: italic;
+    }
+    
+    .project-date {
+      display: table-cell;
+      text-align: right;
+      font-size: 10pt;
+      font-style: italic;
+      vertical-align: top;
+    }
+    
+    /* Skills Section - Inline layout */
     .skills-container {
-      margin-bottom: 8px;
+      margin-left: 0.2in;
+      margin-top: 2pt;
     }
     
     .skill-category {
-      margin-bottom: 6px;
-      display: flex;
-      align-items: baseline;
+      margin-bottom: 3pt;
+      font-size: 10pt;
     }
     
     .skill-label {
-      font-weight: 600;
+      font-weight: 700;
       color: #000;
-      margin-right: 8px;
-      min-width: fit-content;
     }
     
     .skill-items {
-      color: #333;
-      flex: 1;
+      color: #000;
+      font-weight: 400;
     }
     
-    /* List Items */
+    /* Paragraph/Summary Styles */
+    .paragraph {
+      margin-bottom: 8pt;
+      text-align: left;
+      color: #000;
+      font-size: 10pt;
+      line-height: 1.4;
+    }
+    
+    /* List items for simple lists */
     .list-item {
-      margin-bottom: 4px;
-      color: #333;
-      padding-left: 15px;
+      margin-bottom: 2pt;
+      color: #000;
+      font-size: 10pt;
+      padding-left: 0.2in;
       position: relative;
     }
     
@@ -333,27 +372,41 @@ class PdfGeneratorService {
   }
 
   /**
-   * Render header section
+   * Render header section - Jake's format with all info on one line
    */
   renderHeader(personalInfo) {
     if (!personalInfo) return '';
     
+    // Combine all contact info into one line with pipe separators
     const contactParts = [];
-    if (personalInfo.phone) contactParts.push(personalInfo.phone);
-    if (personalInfo.email) contactParts.push(`<a href="mailto:${personalInfo.email}">${personalInfo.email}</a>`);
-    if (personalInfo.location) contactParts.push(personalInfo.location);
     
-    const linkParts = [];
-    if (personalInfo.linkedin) linkParts.push(`<a href="${personalInfo.linkedin}">${this.cleanUrl(personalInfo.linkedin)}</a>`);
-    if (personalInfo.github) linkParts.push(`<a href="${personalInfo.github}">${this.cleanUrl(personalInfo.github)}</a>`);
-    if (personalInfo.website) linkParts.push(`<a href="${personalInfo.website}">${this.cleanUrl(personalInfo.website)}</a>`);
+    if (personalInfo.phone) {
+      contactParts.push(personalInfo.phone);
+    }
+    
+    if (personalInfo.email) {
+      contactParts.push(`<a href="mailto:${personalInfo.email}">${personalInfo.email}</a>`);
+    }
+    
+    if (personalInfo.linkedin) {
+      const linkedinDisplay = personalInfo.linkedin.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      contactParts.push(`<a href="${personalInfo.linkedin}">${linkedinDisplay}</a>`);
+    }
+    
+    if (personalInfo.github) {
+      const githubDisplay = personalInfo.github.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      contactParts.push(`<a href="${personalInfo.github}">${githubDisplay}</a>`);
+    }
+    
+    if (personalInfo.website) {
+      const websiteDisplay = personalInfo.website.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      contactParts.push(`<a href="${personalInfo.website}">${websiteDisplay}</a>`);
+    }
     
     return `
       <div class="header">
         ${personalInfo.name ? `<div class="name">${personalInfo.name}</div>` : ''}
-        ${personalInfo.title ? `<div class="title">${personalInfo.title}</div>` : ''}
-        ${contactParts.length ? `<div class="contact-info">${contactParts.join(' | ')}</div>` : ''}
-        ${linkParts.length ? `<div class="contact-info">${linkParts.join(' | ')}</div>` : ''}
+        ${contactParts.length ? `<div class="contact-line">${contactParts.join('<span class="pipe">|</span>')}</div>` : ''}
       </div>
     `;
   }
@@ -384,9 +437,16 @@ class PdfGeneratorService {
           break;
           
         case 'experience':
-          section.items.forEach(item => {
-            html += this.renderExperienceItem(item);
-          });
+          // Check if this is actually a projects section based on title
+          if (section.title && section.title.toLowerCase().includes('project')) {
+            section.items.forEach(item => {
+              html += this.renderProjectItem(item);
+            });
+          } else {
+            section.items.forEach(item => {
+              html += this.renderExperienceItem(item);
+            });
+          }
           break;
           
         case 'education':
@@ -398,12 +458,7 @@ class PdfGeneratorService {
         case 'skills':
           html += '<div class="skills-container">';
           section.categories.forEach(category => {
-            html += `
-              <div class="skill-category">
-                <span class="skill-label">${category.name}:</span>
-                <span class="skill-items">${this.escapeHtml(category.skills)}</span>
-              </div>
-            `;
+            html += `<div class="skill-category"><span class="skill-label">${this.escapeHtml(category.name)}:</span> <span class="skill-items">${this.escapeHtml(category.skills)}</span></div>`;
           });
           html += '</div>';
           break;
@@ -416,26 +471,29 @@ class PdfGeneratorService {
   }
 
   /**
-   * Render experience item
+   * Render experience item - Jake's two-column layout
    */
   renderExperienceItem(item) {
     let html = '<div class="experience-item">';
     
-    html += '<div class="item-header">';
-    html += `<div class="item-title">${this.escapeHtml(item.title || '')}</div>`;
-    if (item.dateRange) {
-      html += `<div class="item-date">${this.escapeHtml(item.dateRange)}</div>`;
-    }
+    // First row: Title and Date
+    html += '<div class="item-row">';
+    html += `<div class="item-left"><span class="item-title">${this.escapeHtml(item.title || '')}</span></div>`;
+    html += `<div class="item-right"><span class="item-date">${this.escapeHtml(item.dateRange || '')}</span></div>`;
     html += '</div>';
     
-    if (item.organization) {
-      html += `<div class="item-subtitle">${this.escapeHtml(item.organization)}</div>`;
+    // Second row: Organization/Location and Date continuation
+    if (item.organization || item.location) {
+      html += '<div class="item-row">';
+      let orgLocation = [];
+      if (item.organization) orgLocation.push(this.escapeHtml(item.organization));
+      if (item.location) orgLocation.push(this.escapeHtml(item.location));
+      html += `<div class="item-left"><span class="item-subtitle">${orgLocation.join(', ')}</span></div>`;
+      html += '<div class="item-right"></div>';
+      html += '</div>';
     }
     
-    if (item.location) {
-      html += `<div class="item-location">${this.escapeHtml(item.location)}</div>`;
-    }
-    
+    // Bullet points
     if (item.description && item.description.length > 0) {
       html += '<div class="bullet-list">';
       item.description.forEach(desc => {
@@ -449,30 +507,74 @@ class PdfGeneratorService {
   }
 
   /**
-   * Render education item
+   * Render education item - Jake's two-column layout
    */
   renderEducationItem(item) {
     let html = '<div class="education-item">';
     
-    html += '<div class="item-header">';
-    html += `<div class="item-title">${this.escapeHtml(item.degree || '')}</div>`;
-    if (item.date) {
-      html += `<div class="item-date">${this.escapeHtml(item.date)}</div>`;
-    }
+    // First row: Institution and Location
+    html += '<div class="item-row">';
+    html += `<div class="item-left"><span class="item-title">${this.escapeHtml(item.institution || '')}</span></div>`;
+    html += `<div class="item-right"><span class="item-date">${this.escapeHtml(item.location || '')}</span></div>`;
     html += '</div>';
     
-    if (item.institution) {
-      html += `<div class="item-subtitle">${this.escapeHtml(item.institution)}</div>`;
-    }
+    // Second row: Degree and Date
+    html += '<div class="item-row">';
+    html += `<div class="item-left"><span class="item-subtitle">${this.escapeHtml(item.degree || '')}</span></div>`;
+    html += `<div class="item-right"><span class="item-date">${this.escapeHtml(item.date || '')}</span></div>`;
+    html += '</div>';
     
-    if (item.location) {
-      html += `<div class="item-location">${this.escapeHtml(item.location)}</div>`;
-    }
-    
+    // Additional details if any
     if (item.details && item.details.length > 0) {
       html += '<div class="bullet-list">';
       item.details.forEach(detail => {
         html += `<div class="bullet-item">${this.escapeHtml(detail)}</div>`;
+      });
+      html += '</div>';
+    }
+    
+    html += '</div>';
+    return html;
+  }
+
+  /**
+   * Render project item - Jake's format with tech stack inline
+   */
+  renderProjectItem(item) {
+    let html = '<div class="project-item">';
+    
+    // Project header with title, tech stack, and date
+    html += '<div class="project-header">';
+    
+    // Extract tech stack from organization field or title
+    let projectTitle = item.title || '';
+    let techStack = '';
+    
+    // Check if tech stack is in organization field (common pattern)
+    if (item.organization && item.organization.includes('|')) {
+      const parts = item.organization.split('|');
+      techStack = parts[0].trim();
+    } else if (projectTitle.includes('|')) {
+      const parts = projectTitle.split('|');
+      projectTitle = parts[0].trim();
+      techStack = parts[1].trim();
+    }
+    
+    html += '<div class="project-title">';
+    html += `<strong>${this.escapeHtml(projectTitle)}</strong>`;
+    if (techStack) {
+      html += ` <span class="project-tech">| ${this.escapeHtml(techStack)}</span>`;
+    }
+    html += '</div>';
+    
+    html += `<div class="project-date">${this.escapeHtml(item.dateRange || '')}</div>`;
+    html += '</div>';
+    
+    // Bullet points
+    if (item.description && item.description.length > 0) {
+      html += '<div class="bullet-list">';
+      item.description.forEach(desc => {
+        html += `<div class="bullet-item">${this.escapeHtml(desc)}</div>`;
       });
       html += '</div>';
     }
