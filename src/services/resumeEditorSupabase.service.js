@@ -8,17 +8,16 @@ const { v4: uuidv4 } = require('uuid');
 const { Document, Packer, Paragraph, TextRun } = require('docx');
 const { AppError } = require('../middleware/errorHandler');
 const pdfGenerator = require('./pdfGenerator');
+const supabaseConfig = require('../../config/supabase.config');
 
 // Initialize Supabase client
-const supabaseUrl = process.env.SUPABASE_URL?.trim();
-const supabaseKey = process.env.SUPABASE_ANON_KEY?.trim();
+console.log('Initializing Supabase with config:', {
+  url: supabaseConfig.url,
+  keyLength: supabaseConfig.anonKey?.length,
+  keyPreview: supabaseConfig.anonKey?.substring(0, 20) + '...'
+});
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error('Missing Supabase credentials');
-  throw new Error('Supabase configuration missing');
-}
-
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient(supabaseConfig.url, supabaseConfig.anonKey);
 
 class ResumeEditorSupabaseService {
   /**
