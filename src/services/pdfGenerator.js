@@ -47,17 +47,28 @@ class PdfGeneratorService {
           'chromium'                     // System PATH
         ].filter(Boolean);
         
+        console.log('Trying Chromium paths:', possiblePaths);
+        
         for (const path of possiblePaths) {
           try {
             options.executablePath = path;
+            console.log('Using Chromium path:', path);
             break;
           } catch (e) {
+            console.error(`Failed to use path ${path}:`, e.message);
             continue;
           }
         }
       }
       
-      this.browserInstance = await puppeteer.launch(options);
+      try {
+        console.log('Launching Puppeteer with options:', options);
+        this.browserInstance = await puppeteer.launch(options);
+        console.log('Puppeteer launched successfully');
+      } catch (error) {
+        console.error('Failed to launch Puppeteer:', error);
+        throw error;
+      }
     }
     return this.browserInstance;
   }
@@ -66,17 +77,25 @@ class PdfGeneratorService {
    * Generate PDF from resume data
    */
   async generatePDF(resumeData, userId) {
-    const browser = await this.getBrowser();
-    const page = await browser.newPage();
+    console.log('PDF Generator: Starting PDF generation for user:', userId);
+    
+    let browser;
+    let page;
     
     try {
+      browser = await this.getBrowser();
+      page = await browser.newPage();
+      
       // Generate HTML content
+      console.log('Generating HTML content...');
       const html = this.generateHTML(resumeData);
       
       // Set content and wait for styles to load
+      console.log('Setting page content...');
       await page.setContent(html, { waitUntil: 'networkidle0' });
       
       // Generate PDF with professional settings
+      console.log('Generating PDF buffer...');
       const pdfBuffer = await page.pdf({
         format: 'Letter',
         printBackground: true,
@@ -88,8 +107,12 @@ class PdfGeneratorService {
         }
       });
       
+      console.log('PDF buffer generated, size:', pdfBuffer.length);
+      
       // Upload to Supabase
       const fileName = `${userId}/resume_${Date.now()}_${uuidv4()}.pdf`;
+      console.log('Uploading to Supabase storage with filename:', fileName);
+      
       const { data, error } = await supabase.storage
         .from('resumes')
         .upload(fileName, pdfBuffer, {
@@ -97,17 +120,28 @@ class PdfGeneratorService {
           upsert: true
         });
       
-      if (error) throw new AppError('Failed to upload PDF to storage', 500);
+      if (error) {
+        console.error('Supabase storage upload error:', error);
+        throw new AppError(`Failed to upload PDF to storage: ${error.message}`, 500);
+      }
+      
+      console.log('PDF uploaded successfully to Supabase');
       
       // Get public URL
       const { data: { publicUrl } } = supabase.storage
         .from('resumes')
         .getPublicUrl(fileName);
       
+      console.log('PDF public URL:', publicUrl);
       return publicUrl;
       
+    } catch (error) {
+      console.error('PDF generation error:', error);
+      throw error;
     } finally {
-      await page.close();
+      if (page) {
+        await page.close();
+      }
     }
   }
 

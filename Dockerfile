@@ -22,8 +22,11 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
+# Install dependencies (including dev dependencies for Puppeteer)
 RUN npm ci --production=false
+
+# Verify Chromium installation
+RUN chromium-browser --version || echo "Chromium not found"
 
 # Copy application code
 COPY . .
