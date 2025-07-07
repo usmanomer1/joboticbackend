@@ -36,7 +36,7 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, `resume-${uniqueSuffix}.pdf`);
+    cb(null, `resume-${uniqueSuffix}${path.extname(file.originalname)}`);
   }
 });
 
@@ -46,11 +46,12 @@ const upload = multer({
     fileSize: 10 * 1024 * 1024 // 10MB limit
   },
   fileFilter: (req, file, cb) => {
-    console.log('File upload attempt:', {
+    console.log('=== MULTER FILE FILTER ===');
+    console.log('File details:', {
       fieldname: file.fieldname,
       originalname: file.originalname,
       mimetype: file.mimetype,
-      size: file.size
+      encoding: file.encoding
     });
     
     // Accept various PDF mimetypes AND text files for AI generation
@@ -65,18 +66,28 @@ const upload = multer({
     
     const textMimetypes = [
       'text/plain',
+      'application/text',
       'text/txt',
       'application/txt'
     ];
     
     const allAllowedMimetypes = [...pdfMimetypes, ...textMimetypes];
     
-    if (allAllowedMimetypes.includes(file.mimetype) || 
-        file.originalname.toLowerCase().endsWith('.pdf') ||
-        file.originalname.toLowerCase().endsWith('.txt')) {
+    // Check mimetype or file extension
+    const ext = path.extname(file.originalname).toLowerCase();
+    const isAllowedMimetype = allAllowedMimetypes.includes(file.mimetype);
+    const isAllowedExtension = ['.pdf', '.txt'].includes(ext);
+    
+    if (isAllowedMimetype || isAllowedExtension) {
+      console.log('File accepted:', file.originalname);
       cb(null, true);
     } else {
-      cb(new Error(`Only PDF or text files are allowed. Received: ${file.mimetype} for file: ${file.originalname}`));
+      console.error('File rejected:', {
+        mimetype: file.mimetype,
+        extension: ext,
+        filename: file.originalname
+      });
+      cb(new AppError(`Only PDF or text files are allowed. Received: ${file.mimetype} (${ext})`, 400));
     }
   }
 });
@@ -217,96 +228,37 @@ async function storeSession(sessionData) {
  * @access  Private
  */
 router.post('/parse-for-edit',
-  (req, res, next) => {
-    console.log('=== PRE-MULTER DEBUG ===');
-    console.log('Content-Type:', req.headers['content-type']);
-    console.log('Request method:', req.method);
-    console.log('Request URL:', req.url);
-    console.log('Raw headers:', JSON.stringify(req.headers, null, 2));
-    next();
-  },
-  (req, res, next) => {
-    // Enhanced error handling for multer
-    upload.single('resume')(req, res, (err) => {
-      if (err) {
-        console.error('=== MULTER ERROR ===');
-        console.error('Error type:', err.name);
-        console.error('Error message:', err.message);
-        console.error('Error code:', err.code);
-        
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          return res.status(400).json({
-            success: false,
-            error: 'File too large. Maximum size is 10MB.',
-            details: {
-              maxSize: '10MB',
-              errorCode: 'LIMIT_FILE_SIZE'
-            }
-          });
-        }
-        
-        if (err.message && err.message.includes('Only PDF or text files are allowed')) {
-          return res.status(400).json({
-            success: false,
-            error: err.message,
-            details: {
-              acceptedFormats: ['application/pdf', 'text/plain'],
-              acceptedExtensions: ['.pdf', '.txt'],
-              receivedMimetype: req.file?.mimetype || 'unknown'
-            }
-          });
-        }
-        
-        return res.status(400).json({
-          success: false,
-          error: 'File upload failed',
-          details: {
-            message: err.message,
-            expectedFieldName: 'resume',
-            hint: 'Ensure you are using FormData with field name "resume"'
-          }
-        });
-      }
-      next();
-    });
-  },
-  (req, res, next) => {
-    console.log('=== POST-MULTER DEBUG ===');
-    console.log('Body after multer:', req.body);
-    console.log('File after multer:', req.file);
-    console.log('Body field names:', Object.keys(req.body));
-    
-    // Check if body has file data (wrong format)
-    if (!req.file && req.body.resume) {
-      console.error('File data found in body instead of multipart');
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid request format',
-        details: {
-          issue: 'File data found in JSON body instead of multipart/form-data',
-          hint: 'Use multipart/form-data with file upload, not JSON',
-          example: 'FormData.append("resume", file); FormData.append("userId", "123");'
-        }
-      });
-    }
-    
-    next();
-  },
+  upload.single('resume'),
   validate(validators.parseForEdit),
   asyncHandler(async (req, res) => {
-    console.log('=== DEBUG: Request received ===');
-    console.log('Headers:', req.headers);
-    console.log('Body:', req.body);
-    console.log('File:', req.file);
-    console.log('Files:', req.files);
+    console.log('=== PARSE-FOR-EDIT REQUEST ===');
+    console.log('Headers content-type:', req.headers['content-type']);
+    console.log('Headers content-length:', req.headers['content-length']);
+    console.log('Body fields:', Object.keys(req.body));
+    console.log('File received:', req.file ? 'YES' : 'NO');
+    
+    if (req.file) {
+      console.log('File details:', {
+        fieldname: req.file.fieldname,
+        originalname: req.file.originalname,
+        mimetype: req.file.mimetype,
+        size: req.file.size,
+        path: req.file.path
+      });
+    }
     
     const { userId, jobDescription } = req.body;
     const pdfFile = req.file;
     
     if (!pdfFile) {
-      console.error('No file received. Check field name. Expected: "resume"');
+      console.error('NO FILE RECEIVED!');
+      console.log('Debug info:', {
+        bodyKeys: Object.keys(req.body),
+        bodyValues: req.body,
+        hasFile: !!req.file,
+        hasFiles: !!req.files
+      });
       
-      // Provide detailed error response
       return res.status(400).json({
         success: false,
         error: 'No file uploaded',
@@ -314,17 +266,14 @@ router.post('/parse-for-edit',
           expectedFieldName: 'resume',
           receivedFields: Object.keys(req.body),
           contentType: req.headers['content-type'],
-          hint: 'Ensure you are using multipart/form-data and the file field is named "resume"',
-          example: {
-            frontend: 'formData.append("resume", file); formData.append("userId", "123");',
-            curl: 'curl -X POST -F "resume=@file.pdf" -F "userId=123" http://api/endpoint'
-          }
+          contentLength: req.headers['content-length'],
+          hint: 'Ensure you are using multipart/form-data with field name "resume"',
+          debugEndpoint: '/api/resume-editor-html/parse-for-edit-debug'
         }
       });
     }
     
-    console.log('=== HTML PARSE-FOR-EDIT REQUEST ===');
-    console.log('PDF file:', pdfFile.filename);
+    console.log('Processing file:', pdfFile.originalname);
     console.log('User ID:', userId);
     console.log('Has job description:', !!jobDescription);
     
@@ -333,7 +282,10 @@ router.post('/parse-for-edit',
       let conversionResult;
       
       // Check if it's a text file or PDF
-      if (pdfFile.mimetype.includes('text') || pdfFile.originalname.toLowerCase().endsWith('.txt')) {
+      const isTextFile = pdfFile.mimetype.includes('text') || 
+                        pdfFile.originalname.toLowerCase().endsWith('.txt');
+      
+      if (isTextFile) {
         console.log('Processing text file...');
         // For text files, create HTML directly
         const textContent = await fs.readFile(pdfFile.path, 'utf-8');
@@ -677,22 +629,15 @@ router.get('/download/:fileId',
  * @access  Private
  */
 router.post('/parse-for-edit-debug',
-  (req, res, next) => {
-    console.log('=== DEBUG ENDPOINT PRE-MULTER ===');
-    console.log('Headers:', JSON.stringify(req.headers, null, 2));
-    console.log('Method:', req.method);
-    console.log('URL:', req.url);
-    next();
-  },
   upload.any(), // Accept any field name
   asyncHandler(async (req, res) => {
-    console.log('=== DEBUG ENDPOINT POST-MULTER ===');
-    console.log('Files received:', req.files);
-    console.log('Body:', req.body);
-    console.log('Raw body keys:', Object.keys(req.body));
-    
-    // Check for common field name variations
-    const commonFieldNames = ['file', 'pdf', 'document', 'upload', 'resume_file', 'resumeFile'];
+    console.log('=== DEBUG ENDPOINT ===');
+    console.log('Headers:', {
+      'content-type': req.headers['content-type'],
+      'content-length': req.headers['content-length']
+    });
+    console.log('Files received:', req.files?.length || 0);
+    console.log('Body fields:', Object.keys(req.body));
     
     if (req.files && req.files.length > 0) {
       const file = req.files[0];
@@ -700,74 +645,36 @@ router.post('/parse-for-edit-debug',
         fieldname: file.fieldname,
         originalname: file.originalname,
         mimetype: file.mimetype,
-        size: file.size,
-        buffer: file.buffer ? 'Buffer present' : 'No buffer'
+        size: file.size
       });
-      
-      // If it's one of the common field names, provide specific guidance
-      const isCommonName = commonFieldNames.includes(file.fieldname);
       
       res.json({
         success: true,
         message: 'Debug info collected',
         fileReceived: true,
-        actualFieldName: file.fieldname,
-        expectedFieldName: 'resume',
-        mimetype: file.mimetype,
-        originalName: file.originalname,
-        fileSize: file.size,
-        isCommonFieldName: isCommonName,
-        hint: `Please use field name "resume" instead of "${file.fieldname}" in your FormData`,
-        example: {
-          correct: 'formData.append("resume", file)',
-          yours: `formData.append("${file.fieldname}", file)`,
-          fullExample: `
-const formData = new FormData();
-formData.append("resume", file);
-formData.append("userId", "123");
-formData.append("jobDescription", "optional job description");
-
-fetch('/api/resume-editor-html/parse-for-edit', {
-  method: 'POST',
-  headers: { 'X-API-Key': 'your-key' },
-  body: formData
-})`
-        }
+        fileDetails: {
+          fieldName: file.fieldname,
+          expectedFieldName: 'resume',
+          fileName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size
+        },
+        bodyFields: Object.keys(req.body),
+        hint: file.fieldname !== 'resume' 
+          ? `Use field name "resume" instead of "${file.fieldname}"` 
+          : 'Field name is correct'
       });
     } else {
-      // Check if data is in wrong format
-      const hasBase64 = Object.values(req.body).some(val => 
-        typeof val === 'string' && val.includes('data:') && val.includes('base64')
-      );
-      
       res.json({
         success: false,
-        message: 'No files received via multipart/form-data',
-        headers: req.headers,
-        contentType: req.headers['content-type'],
+        message: 'No files received',
+        headers: {
+          'content-type': req.headers['content-type'],
+          'content-length': req.headers['content-length']
+        },
         bodyFields: Object.keys(req.body),
-        bodyFieldCount: Object.keys(req.body).length,
-        hasBase64Data: hasBase64,
-        possibleIssues: [
-          req.headers['content-type']?.includes('application/json') ? 
-            'You are sending JSON instead of multipart/form-data' : null,
-          hasBase64 ? 
-            'You are sending base64 data in JSON instead of file upload' : null,
-          !req.headers['content-type']?.includes('multipart/form-data') ?
-            'Content-Type header is not multipart/form-data' : null
-        ].filter(Boolean),
-        hint: 'Make sure you are sending a file with FormData, not JSON',
-        correctExample: `
-// Frontend example:
-const formData = new FormData();
-formData.append("resume", file); // file from input element
-formData.append("userId", "123");
-
-// Do NOT use JSON.stringify or set Content-Type manually
-fetch(url, {
-  method: 'POST',
-  body: formData // FormData sets content-type automatically
-})`
+        bodyData: req.body,
+        hint: 'Ensure you are sending a file with multipart/form-data'
       });
     }
   })
