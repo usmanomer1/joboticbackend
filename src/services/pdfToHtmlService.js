@@ -101,13 +101,17 @@ class PdfToHtmlService {
     // Create a simple HTML structure that mimics pdf2htmlEX output
     const sections = [];
     let yPosition = 50;
+    let blockId = 0;
     
-    // Add each line as a positioned text element
+    // Add each line as a positioned text element with proper IDs for text matching
     const lines = originalText.split('\n');
     lines.forEach((line, index) => {
       if (line.trim()) {
-        sections.push(`<div class="t" style="position: absolute; left: 50px; top: ${yPosition}px;">${this.escapeHtml(line)}</div>`);
-        yPosition += 20;
+        const fontSize = this.detectFontSize(line, parsedResume);
+        const fontWeight = this.detectFontWeight(line, parsedResume);
+        sections.push(`<div class="t" id="text-0-${blockId}" style="position: absolute; left: 50px; top: ${yPosition}px; font-size: ${fontSize}px; font-weight: ${fontWeight};">${this.escapeHtml(line)}</div>`);
+        yPosition += fontSize * 1.5;
+        blockId++;
       } else {
         yPosition += 10; // Empty line
       }
@@ -118,18 +122,80 @@ class PdfToHtmlService {
 <head>
 <meta charset="utf-8"/>
 <style>
-.pc { position: relative; overflow: hidden; width: 595px; height: 842px; margin: 0 auto; background: white; }
-.t { position: absolute; white-space: pre-wrap; font-family: Arial, sans-serif; font-size: 12px; }
-.fallback-notice { position: absolute; top: 10px; right: 10px; background: #fff3cd; padding: 5px 10px; border: 1px solid #ffeaa7; border-radius: 3px; font-size: 10px; }
+body { margin: 0; padding: 0; }
+.pc { position: relative; overflow: hidden; width: 595px; min-height: 842px; margin: 0 auto; background: white; border: 1px solid #ddd; padding: 40px; box-sizing: border-box; }
+.t { position: absolute; white-space: pre-wrap; font-family: Arial, sans-serif; font-size: 12px; line-height: 1.5; }
+.fallback-notice { position: fixed; top: 10px; right: 10px; background: #fff3cd; padding: 5px 10px; border: 1px solid #ffeaa7; border-radius: 3px; font-size: 10px; z-index: 1000; }
+.suggestion { background-color: #fffbdd; border: 1px dashed #ffc107; padding: 2px; }
+.suggestion-accepted { background-color: #d4edda; border: 1px solid #28a745; }
+.suggestion-rejected { text-decoration: line-through; opacity: 0.5; }
 </style>
 </head>
 <body>
 <div class="pc">
-  <div class="fallback-notice">Text-based conversion (fallback mode)</div>
+  <div class="fallback-notice">Text extraction mode (pdf2htmlEX not available)</div>
   ${sections.join('\n  ')}
 </div>
 </body>
 </html>`;
+  }
+  
+  /**
+   * Detect font size based on content type
+   */
+  detectFontSize(line, parsedResume) {
+    const upperLine = line.toUpperCase();
+    const trimmedLine = line.trim();
+    
+    // Name is usually larger
+    if (parsedResume.personalInfo && 
+        (line.includes(parsedResume.personalInfo.name) || 
+         line === parsedResume.personalInfo.name)) {
+      return 18;
+    }
+    
+    // Section headers
+    if (upperLine === trimmedLine && trimmedLine.length > 3 &&
+        ['EXPERIENCE', 'EDUCATION', 'SKILLS', 'PROJECTS', 'SUMMARY', 'OBJECTIVE'].some(s => upperLine.includes(s))) {
+      return 14;
+    }
+    
+    // Job titles, school names
+    if (parsedResume.experience) {
+      for (const exp of parsedResume.experience) {
+        if (line.includes(exp.title) || line.includes(exp.company)) {
+          return 13;
+        }
+      }
+    }
+    
+    // Default
+    return 11;
+  }
+  
+  /**
+   * Detect font weight based on content
+   */
+  detectFontWeight(line, parsedResume) {
+    const upperLine = line.toUpperCase();
+    const trimmedLine = line.trim();
+    
+    // Headers and names are bold
+    if ((parsedResume.personalInfo && line.includes(parsedResume.personalInfo.name)) ||
+        (upperLine === trimmedLine && trimmedLine.length > 3)) {
+      return 'bold';
+    }
+    
+    // Job titles
+    if (parsedResume.experience) {
+      for (const exp of parsedResume.experience) {
+        if (line.includes(exp.title)) {
+          return '600';
+        }
+      }
+    }
+    
+    return 'normal';
   }
 
   /**
