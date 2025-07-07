@@ -53,8 +53,8 @@ const upload = multer({
       size: file.size
     });
     
-    // Accept various PDF mimetypes
-    const allowedMimetypes = [
+    // Accept various PDF mimetypes AND text files for AI generation
+    const pdfMimetypes = [
       'application/pdf',
       'application/x-pdf',
       'application/acrobat',
@@ -63,10 +63,20 @@ const upload = multer({
       'text/x-pdf'
     ];
     
-    if (allowedMimetypes.includes(file.mimetype) || file.originalname.toLowerCase().endsWith('.pdf')) {
+    const textMimetypes = [
+      'text/plain',
+      'text/txt',
+      'application/txt'
+    ];
+    
+    const allAllowedMimetypes = [...pdfMimetypes, ...textMimetypes];
+    
+    if (allAllowedMimetypes.includes(file.mimetype) || 
+        file.originalname.toLowerCase().endsWith('.pdf') ||
+        file.originalname.toLowerCase().endsWith('.txt')) {
       cb(null, true);
     } else {
-      cb(new Error(`Only PDF files are allowed. Received: ${file.mimetype} for file: ${file.originalname}`));
+      cb(new Error(`Only PDF or text files are allowed. Received: ${file.mimetype} for file: ${file.originalname}`));
     }
   }
 });
@@ -207,7 +217,21 @@ async function storeSession(sessionData) {
  * @access  Private
  */
 router.post('/parse-for-edit',
+  (req, res, next) => {
+    console.log('=== PRE-MULTER DEBUG ===');
+    console.log('Content-Type:', req.headers['content-type']);
+    console.log('Request method:', req.method);
+    console.log('Request URL:', req.url);
+    next();
+  },
   upload.single('resume'),
+  (req, res, next) => {
+    console.log('=== POST-MULTER DEBUG ===');
+    console.log('Body after multer:', req.body);
+    console.log('File after multer:', req.file);
+    console.log('Body field names:', Object.keys(req.body));
+    next();
+  },
   validate(validators.parseForEdit),
   asyncHandler(async (req, res) => {
     console.log('=== DEBUG: Request received ===');
@@ -230,13 +254,37 @@ router.post('/parse-for-edit',
     console.log('Has job description:', !!jobDescription);
     
     try {
-      // Convert PDF to HTML with fallback support
-      console.log('Converting PDF to HTML...');
-      const conversionResult = await pdfToHtmlService.convertWithFallback(pdfFile.path);
-      const htmlPath = conversionResult.htmlPath;
+      let htmlPath;
+      let conversionResult;
       
-      if (conversionResult.fallbackUsed) {
-        console.log('Used fallback text extraction method');
+      // Check if it's a text file or PDF
+      if (pdfFile.mimetype.includes('text') || pdfFile.originalname.toLowerCase().endsWith('.txt')) {
+        console.log('Processing text file...');
+        // For text files, create HTML directly
+        const textContent = await fs.readFile(pdfFile.path, 'utf-8');
+        const tempHtml = pdfToHtmlService.generateFallbackHtml({}, textContent);
+        
+        // Save HTML
+        const outputName = path.basename(pdfFile.originalname, path.extname(pdfFile.originalname));
+        const outputDir = path.join('temp/html', `${outputName}-text`);
+        await fs.ensureDir(outputDir);
+        htmlPath = path.join(outputDir, `${outputName}.html`);
+        await fs.writeFile(htmlPath, tempHtml);
+        
+        conversionResult = {
+          method: 'text-input',
+          htmlPath: htmlPath,
+          fallbackUsed: false
+        };
+      } else {
+        // Convert PDF to HTML with fallback support
+        console.log('Converting PDF to HTML...');
+        conversionResult = await pdfToHtmlService.convertWithFallback(pdfFile.path);
+        htmlPath = conversionResult.htmlPath;
+        
+        if (conversionResult.fallbackUsed) {
+          console.log('Used fallback text extraction method');
+        }
       }
       
       // Parse HTML structure
@@ -544,6 +592,49 @@ router.get('/download/:fileId',
     } catch (error) {
       console.error('Download error:', error);
       throw new AppError('Failed to download file', 500);
+    }
+  })
+);
+
+/**
+ * @route   POST /api/resume-editor-html/parse-for-edit-debug
+ * @desc    Debug endpoint that accepts any field name
+ * @access  Private
+ */
+router.post('/parse-for-edit-debug',
+  upload.any(), // Accept any field name
+  asyncHandler(async (req, res) => {
+    console.log('=== DEBUG ENDPOINT ===');
+    console.log('Files received:', req.files);
+    console.log('Body:', req.body);
+    
+    if (req.files && req.files.length > 0) {
+      const file = req.files[0];
+      console.log('First file details:', {
+        fieldname: file.fieldname,
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size
+      });
+      
+      res.json({
+        success: true,
+        message: 'Debug info collected',
+        fileReceived: true,
+        fieldName: file.fieldname,
+        expectedFieldName: 'resume',
+        mimetype: file.mimetype,
+        originalName: file.originalname,
+        hint: `Please use field name "resume" instead of "${file.fieldname}" in your FormData`
+      });
+    } else {
+      res.json({
+        success: false,
+        message: 'No files received',
+        headers: req.headers,
+        bodyFields: Object.keys(req.body),
+        hint: 'Make sure you are sending a file with FormData'
+      });
     }
   })
 );
