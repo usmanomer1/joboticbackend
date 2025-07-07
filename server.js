@@ -18,6 +18,7 @@ const downloadRoutes = require('./src/routes/download.routes');
 // Import services for validation
 const geminiClient = require('./src/utils/geminiClient');
 const documentGenerationService = require('./src/services/documentGeneration.service');
+const { scheduler: cleanupScheduler } = require('./src/utils/cleanupScheduler');
 
 // Create Express app
 const app = express();
@@ -91,6 +92,11 @@ app.use('/api/resume-editor', authenticateApiKey);
 app.use('/api/resume-simple', authenticateApiKey);
 app.use('/api/resume-editor-v2', authenticateApiKey);
 app.use('/api/format-preserving', authenticateApiKey);
+app.use('/api/resume-editor-html', authenticateApiKey);
+// Test routes - only in development
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/resume-editor-test', authenticateApiKey);
+}
 
 // 6. Mount API routes
 app.use('/api/jobs', jobRoutes);
@@ -100,6 +106,11 @@ app.use('/api/resume-editor', require('./src/routes/resumeEditor.routes'));
 app.use('/api/resume-simple', require('./src/routes/resumeEditorSimple.routes'));
 app.use('/api/resume-editor-v2', require('./src/routes/resumeEditorV2.routes'));
 app.use('/api/format-preserving', require('./src/routes/formatPreserving.routes'));
+app.use('/api/resume-editor-html', require('./src/routes/resumeEditorHtml.routes'));
+// Test routes - only in development
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/resume-editor-test', require('./src/routes/resumeEditorTest.routes'));
+}
 
 // 7. 404 handler (after all routes)
 app.use(notFoundHandler);
@@ -169,7 +180,12 @@ async function validateStartup() {
           console.log('🔒 Running in PRODUCTION mode');
         } else {
           console.log('🛠️  Running in DEVELOPMENT mode');
+          console.log('🧪 Test endpoints available at /api/resume-editor-test');
         }
+        
+        // Start cleanup scheduler
+        cleanupScheduler.startAll();
+        console.log('🧹 Cleanup scheduler started');
       });
       
       // Handle server errors
@@ -203,8 +219,12 @@ async function validateStartup() {
         // Stop cleanup jobs
         if (documentGenerationService && documentGenerationService.stopCleanupJob) {
           documentGenerationService.stopCleanupJob();
-          console.log('✅ Cleanup jobs stopped');
+          console.log('✅ Document cleanup jobs stopped');
         }
+        
+        // Stop cleanup scheduler
+        cleanupScheduler.stopAll();
+        console.log('✅ Cleanup scheduler stopped');
         
         // Exit process
         console.log('👋 Goodbye!');
