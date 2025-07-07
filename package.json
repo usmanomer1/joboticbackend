@@ -38,6 +38,7 @@
     "fs-extra": "^11.3.0",
     "multer": "^2.0.1",
     "node-cache": "^5.1.2",
+    "pdf-parse": "^1.1.1",
     "pdfkit": "^0.17.1",
     "puppeteer": "^24.11.2",
     "uuid": "^9.0.1"
