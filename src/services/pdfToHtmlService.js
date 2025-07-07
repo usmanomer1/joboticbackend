@@ -57,41 +57,49 @@ class PdfToHtmlService {
   }
 
   /**
-   * Fallback conversion using text extraction
+   * Fallback conversion using Puppeteer-based text extraction
    * @param {string} pdfPath - Path to the PDF file
    * @returns {Promise<string>} - Path to generated HTML file
    */
   async fallbackConversion(pdfPath) {
     logger.info('PDF_CONVERSION', 'Using fallback text extraction method');
     
-    // Import existing resume parser service as fallback
-    const resumeParser = require('./resumeParserService');
-    
-    // Extract text from PDF
-    const pdfBuffer = await fs.readFile(pdfPath);
-    const extractedText = await resumeParser.extractTextFromPDF(pdfBuffer);
-    
-    if (!extractedText || extractedText.length < 50) {
-      throw new Error('Failed to extract meaningful text from PDF');
+    try {
+      // Use our Puppeteer-based PDF text extractor
+      const pdfTextExtractor = require('./pdfTextExtractor');
+      
+      // Extract text from PDF
+      const extractedText = await pdfTextExtractor.extractText(pdfPath);
+      
+      if (!extractedText || extractedText.length < 20) {
+        throw new Error('Failed to extract meaningful text from PDF');
+      }
+      
+      // Parse resume structure
+      const parsedResume = pdfTextExtractor.parseResumeStructure(extractedText);
+      
+      // Generate HTML representation
+      const html = this.generateFallbackHtml(parsedResume, extractedText);
+      
+      // Save HTML
+      const outputName = path.basename(pdfPath, '.pdf');
+      const outputPath = path.join(this.tempHtmlDir, `${outputName}-fallback`);
+      await fs.ensureDir(outputPath);
+      
+      const htmlPath = path.join(outputPath, `${outputName}.html`);
+      await fs.writeFile(htmlPath, html);
+      
+      logger.info('PDF_CONVERSION', 'Fallback conversion completed', { 
+        htmlPath,
+        textLength: extractedText.length,
+        sections: parsedResume.sections.length
+      });
+      
+      return htmlPath;
+    } catch (error) {
+      logger.error('PDF_CONVERSION', 'Fallback conversion failed', { error: error.message });
+      throw new Error(`Fallback PDF conversion failed: ${error.message}`);
     }
-    
-    // Parse resume structure
-    const parsedResume = resumeParser.parseResumeText(extractedText);
-    
-    // Generate simple HTML representation
-    const html = this.generateFallbackHtml(parsedResume, extractedText);
-    
-    // Save HTML
-    const outputName = path.basename(pdfPath, '.pdf');
-    const outputPath = path.join(this.tempHtmlDir, `${outputName}-fallback`);
-    await fs.ensureDir(outputPath);
-    
-    const htmlPath = path.join(outputPath, `${outputName}.html`);
-    await fs.writeFile(htmlPath, html);
-    
-    logger.info('PDF_CONVERSION', 'Fallback conversion completed', { htmlPath });
-    
-    return htmlPath;
   }
 
   /**
@@ -148,25 +156,25 @@ body { margin: 0; padding: 0; }
     const trimmedLine = line.trim();
     
     // Name is usually larger
-    if (parsedResume.personalInfo && 
+    if (parsedResume.personalInfo && parsedResume.personalInfo.name &&
         (line.includes(parsedResume.personalInfo.name) || 
          line === parsedResume.personalInfo.name)) {
       return 18;
     }
     
     // Section headers
+    if (parsedResume.sections) {
+      for (const section of parsedResume.sections) {
+        if (line === section.title || upperLine === section.title.toUpperCase()) {
+          return 14;
+        }
+      }
+    }
+    
+    // Check if it's an all-caps header
     if (upperLine === trimmedLine && trimmedLine.length > 3 &&
         ['EXPERIENCE', 'EDUCATION', 'SKILLS', 'PROJECTS', 'SUMMARY', 'OBJECTIVE'].some(s => upperLine.includes(s))) {
       return 14;
-    }
-    
-    // Job titles, school names
-    if (parsedResume.experience) {
-      for (const exp of parsedResume.experience) {
-        if (line.includes(exp.title) || line.includes(exp.company)) {
-          return 13;
-        }
-      }
     }
     
     // Default
