@@ -18,8 +18,11 @@ class PdfToHtmlService {
   async convertWithFallback(pdfPath, options = {}) {
     const { forceFallback = false } = options;
     
-    // Try pdf2htmlEX first unless fallback is forced
-    if (!forceFallback) {
+    // Check if pdf2htmlEX is disabled via environment variable
+    const pdf2htmlexDisabled = process.env.DISABLE_PDF2HTMLEX === 'true';
+    
+    // Try pdf2htmlEX first unless fallback is forced or pdf2htmlEX is disabled
+    if (!forceFallback && !pdf2htmlexDisabled) {
       try {
         const htmlPath = await this.convert(pdfPath);
         return {
@@ -62,7 +65,7 @@ class PdfToHtmlService {
     logger.info('PDF_CONVERSION', 'Using fallback text extraction method');
     
     // Import existing resume parser service as fallback
-    const resumeParser = require('./resumeParser.service');
+    const resumeParser = require('./resumeParserService');
     
     // Extract text from PDF
     const pdfBuffer = await fs.readFile(pdfPath);
