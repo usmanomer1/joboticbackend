@@ -222,14 +222,74 @@ router.post('/parse-for-edit',
     console.log('Content-Type:', req.headers['content-type']);
     console.log('Request method:', req.method);
     console.log('Request URL:', req.url);
+    console.log('Raw headers:', JSON.stringify(req.headers, null, 2));
     next();
   },
-  upload.single('resume'),
+  (req, res, next) => {
+    // Enhanced error handling for multer
+    upload.single('resume')(req, res, (err) => {
+      if (err) {
+        console.error('=== MULTER ERROR ===');
+        console.error('Error type:', err.name);
+        console.error('Error message:', err.message);
+        console.error('Error code:', err.code);
+        
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return res.status(400).json({
+            success: false,
+            error: 'File too large. Maximum size is 10MB.',
+            details: {
+              maxSize: '10MB',
+              errorCode: 'LIMIT_FILE_SIZE'
+            }
+          });
+        }
+        
+        if (err.message && err.message.includes('Only PDF or text files are allowed')) {
+          return res.status(400).json({
+            success: false,
+            error: err.message,
+            details: {
+              acceptedFormats: ['application/pdf', 'text/plain'],
+              acceptedExtensions: ['.pdf', '.txt'],
+              receivedMimetype: req.file?.mimetype || 'unknown'
+            }
+          });
+        }
+        
+        return res.status(400).json({
+          success: false,
+          error: 'File upload failed',
+          details: {
+            message: err.message,
+            expectedFieldName: 'resume',
+            hint: 'Ensure you are using FormData with field name "resume"'
+          }
+        });
+      }
+      next();
+    });
+  },
   (req, res, next) => {
     console.log('=== POST-MULTER DEBUG ===');
     console.log('Body after multer:', req.body);
     console.log('File after multer:', req.file);
     console.log('Body field names:', Object.keys(req.body));
+    
+    // Check if body has file data (wrong format)
+    if (!req.file && req.body.resume) {
+      console.error('File data found in body instead of multipart');
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid request format',
+        details: {
+          issue: 'File data found in JSON body instead of multipart/form-data',
+          hint: 'Use multipart/form-data with file upload, not JSON',
+          example: 'FormData.append("resume", file); FormData.append("userId", "123");'
+        }
+      });
+    }
+    
     next();
   },
   validate(validators.parseForEdit),
@@ -245,7 +305,22 @@ router.post('/parse-for-edit',
     
     if (!pdfFile) {
       console.error('No file received. Check field name. Expected: "resume"');
-      throw new AppError('PDF file is required. Make sure to use field name "resume"', 400);
+      
+      // Provide detailed error response
+      return res.status(400).json({
+        success: false,
+        error: 'No file uploaded',
+        details: {
+          expectedFieldName: 'resume',
+          receivedFields: Object.keys(req.body),
+          contentType: req.headers['content-type'],
+          hint: 'Ensure you are using multipart/form-data and the file field is named "resume"',
+          example: {
+            frontend: 'formData.append("resume", file); formData.append("userId", "123");',
+            curl: 'curl -X POST -F "resume=@file.pdf" -F "userId=123" http://api/endpoint'
+          }
+        }
+      });
     }
     
     console.log('=== HTML PARSE-FOR-EDIT REQUEST ===');
@@ -602,11 +677,22 @@ router.get('/download/:fileId',
  * @access  Private
  */
 router.post('/parse-for-edit-debug',
+  (req, res, next) => {
+    console.log('=== DEBUG ENDPOINT PRE-MULTER ===');
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Method:', req.method);
+    console.log('URL:', req.url);
+    next();
+  },
   upload.any(), // Accept any field name
   asyncHandler(async (req, res) => {
-    console.log('=== DEBUG ENDPOINT ===');
+    console.log('=== DEBUG ENDPOINT POST-MULTER ===');
     console.log('Files received:', req.files);
     console.log('Body:', req.body);
+    console.log('Raw body keys:', Object.keys(req.body));
+    
+    // Check for common field name variations
+    const commonFieldNames = ['file', 'pdf', 'document', 'upload', 'resume_file', 'resumeFile'];
     
     if (req.files && req.files.length > 0) {
       const file = req.files[0];
@@ -614,27 +700,211 @@ router.post('/parse-for-edit-debug',
         fieldname: file.fieldname,
         originalname: file.originalname,
         mimetype: file.mimetype,
-        size: file.size
+        size: file.size,
+        buffer: file.buffer ? 'Buffer present' : 'No buffer'
       });
+      
+      // If it's one of the common field names, provide specific guidance
+      const isCommonName = commonFieldNames.includes(file.fieldname);
       
       res.json({
         success: true,
         message: 'Debug info collected',
         fileReceived: true,
-        fieldName: file.fieldname,
+        actualFieldName: file.fieldname,
         expectedFieldName: 'resume',
         mimetype: file.mimetype,
         originalName: file.originalname,
-        hint: `Please use field name "resume" instead of "${file.fieldname}" in your FormData`
+        fileSize: file.size,
+        isCommonFieldName: isCommonName,
+        hint: `Please use field name "resume" instead of "${file.fieldname}" in your FormData`,
+        example: {
+          correct: 'formData.append("resume", file)',
+          yours: `formData.append("${file.fieldname}", file)`,
+          fullExample: `
+const formData = new FormData();
+formData.append("resume", file);
+formData.append("userId", "123");
+formData.append("jobDescription", "optional job description");
+
+fetch('/api/resume-editor-html/parse-for-edit', {
+  method: 'POST',
+  headers: { 'X-API-Key': 'your-key' },
+  body: formData
+})`
+        }
       });
     } else {
+      // Check if data is in wrong format
+      const hasBase64 = Object.values(req.body).some(val => 
+        typeof val === 'string' && val.includes('data:') && val.includes('base64')
+      );
+      
       res.json({
         success: false,
-        message: 'No files received',
+        message: 'No files received via multipart/form-data',
         headers: req.headers,
+        contentType: req.headers['content-type'],
         bodyFields: Object.keys(req.body),
-        hint: 'Make sure you are sending a file with FormData'
+        bodyFieldCount: Object.keys(req.body).length,
+        hasBase64Data: hasBase64,
+        possibleIssues: [
+          req.headers['content-type']?.includes('application/json') ? 
+            'You are sending JSON instead of multipart/form-data' : null,
+          hasBase64 ? 
+            'You are sending base64 data in JSON instead of file upload' : null,
+          !req.headers['content-type']?.includes('multipart/form-data') ?
+            'Content-Type header is not multipart/form-data' : null
+        ].filter(Boolean),
+        hint: 'Make sure you are sending a file with FormData, not JSON',
+        correctExample: `
+// Frontend example:
+const formData = new FormData();
+formData.append("resume", file); // file from input element
+formData.append("userId", "123");
+
+// Do NOT use JSON.stringify or set Content-Type manually
+fetch(url, {
+  method: 'POST',
+  body: formData // FormData sets content-type automatically
+})`
       });
+    }
+  })
+);
+
+/**
+ * @route   POST /api/resume-editor-html/parse-for-edit-flexible
+ * @desc    Flexible endpoint that accepts common field names
+ * @access  Private
+ */
+router.post('/parse-for-edit-flexible',
+  upload.any(),
+  validate(validators.parseForEdit),
+  asyncHandler(async (req, res) => {
+    console.log('=== FLEXIBLE PARSE ENDPOINT ===');
+    
+    // Try to find file from common field names
+    let pdfFile = null;
+    const commonFieldNames = ['resume', 'file', 'pdf', 'document', 'upload', 'resumeFile', 'resume_file'];
+    
+    if (req.files && req.files.length > 0) {
+      // Take the first file regardless of field name
+      pdfFile = req.files[0];
+      console.log(`File received with field name: ${pdfFile.fieldname}`);
+    } else if (req.file) {
+      pdfFile = req.file;
+    }
+    
+    if (!pdfFile) {
+      return res.status(400).json({
+        success: false,
+        error: 'No file uploaded',
+        details: {
+          acceptedFieldNames: commonFieldNames,
+          hint: 'Upload a file using one of the accepted field names'
+        }
+      });
+    }
+    
+    // Process the file using the same logic as parse-for-edit
+    const { userId, jobDescription } = req.body;
+    
+    console.log('Processing file:', {
+      fieldName: pdfFile.fieldname,
+      filename: pdfFile.originalname,
+      mimetype: pdfFile.mimetype,
+      size: pdfFile.size
+    });
+    
+    try {
+      let htmlPath;
+      let conversionResult;
+      
+      // Check if it's a text file or PDF
+      if (pdfFile.mimetype.includes('text') || pdfFile.originalname.toLowerCase().endsWith('.txt')) {
+        console.log('Processing text file...');
+        const textContent = await fs.readFile(pdfFile.path, 'utf-8');
+        const tempHtml = pdfToHtmlService.generateFallbackHtml({}, textContent);
+        
+        const outputName = path.basename(pdfFile.originalname, path.extname(pdfFile.originalname));
+        const outputDir = path.join('temp/html', `${outputName}-text`);
+        await fs.ensureDir(outputDir);
+        htmlPath = path.join(outputDir, `${outputName}.html`);
+        await fs.writeFile(htmlPath, tempHtml);
+        
+        conversionResult = {
+          method: 'text-input',
+          htmlPath: htmlPath,
+          fallbackUsed: false
+        };
+      } else {
+        console.log('Converting PDF to HTML...');
+        conversionResult = await pdfToHtmlService.convertWithFallback(pdfFile.path);
+        htmlPath = conversionResult.htmlPath;
+      }
+      
+      // Parse HTML structure
+      const parsed = await htmlParserService.parseResumeHtml(htmlPath);
+      const { fullHtml, textBlocks, documentStructure } = parsed;
+      
+      // Generate AI suggestions if job description provided
+      let suggestions = [];
+      let mappedSuggestions = [];
+      
+      if (jobDescription) {
+        suggestions = await generateAISuggestions(documentStructure, jobDescription);
+        mappedSuggestions = textMatcher.mapSuggestionsToHtml(textBlocks, suggestions);
+      }
+      
+      const htmlWithSuggestions = mappedSuggestions.length > 0
+        ? htmlParserService.applySuggestionsToHtml(fullHtml, mappedSuggestions)
+        : fullHtml;
+      
+      const sessionId = await storeSession({
+        userId: userId || `temp_${uuidv4()}`,
+        originalPdfPath: pdfFile.path,
+        htmlPath,
+        originalHtml: fullHtml,
+        currentHtml: htmlWithSuggestions,
+        textBlocks,
+        suggestions: mappedSuggestions,
+        documentStructure
+      });
+      
+      // Clean up uploaded file
+      fs.remove(pdfFile.path).catch(console.error);
+      
+      res.json({
+        success: true,
+        data: {
+          sessionId,
+          htmlContent: htmlWithSuggestions,
+          suggestions: mappedSuggestions,
+          documentStructure,
+          conversionMethod: conversionResult.method,
+          uploadInfo: {
+            fieldNameUsed: pdfFile.fieldname,
+            recommendedFieldName: 'resume',
+            message: 'File processed successfully. For consistency, please use field name "resume" in future requests.'
+          },
+          stats: {
+            totalBlocks: textBlocks.length,
+            totalSuggestions: mappedSuggestions.length,
+            sections: documentStructure.sections.map(s => ({
+              type: s.type,
+              itemCount: s.items.length
+            }))
+          }
+        }
+      });
+      
+    } catch (error) {
+      if (pdfFile) {
+        fs.remove(pdfFile.path).catch(console.error);
+      }
+      console.error('Parse error:', error);
+      throw new AppError(`Failed to parse resume: ${error.message}`, 500);
     }
   })
 );
