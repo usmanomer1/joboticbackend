@@ -127,11 +127,11 @@ const validators = {
    * Validates job matching request with AI scoring
    */
   jobMatch: [
-    // Resume is always required for matching
-    body('resume')
+    // Resume text is always required for matching
+    body('resumeText')
       .trim()
-      .notEmpty().withMessage('Resume content is required')
-      .isLength({ min: 50, max: 50000 }).withMessage('Resume must be between 50 and 50000 characters'),
+      .notEmpty().withMessage('Resume text content is required')
+      .isLength({ min: 50, max: 50000 }).withMessage('Resume text must be between 50 and 50000 characters'),
     
     // Query is optional, but if not provided, jobTitle and location are required
     body('query')
@@ -209,63 +209,6 @@ const validators = {
     })
   ],
 
-  /**
-   * Validates resume analysis request
-   */
-  resumeAnalysis: [
-    body('resume')
-      .trim()
-      .notEmpty().withMessage('Resume content is required')
-      .isLength({ min: 50, max: 50000 }).withMessage('Resume must be between 50 and 50000 characters'),
-    body('job_description')
-      .trim()
-      .notEmpty().withMessage('Job description is required')
-      .isLength({ min: 50, max: 10000 }).withMessage('Job description must be between 50 and 10000 characters'),
-    body('job_title')
-      .optional()
-      .trim()
-      .isLength({ max: 200 }).withMessage('Job title must not exceed 200 characters')
-  ],
-
-  /**
-   * Validates resume optimization request
-   */
-  resumeOptimization: [
-    body('resume')
-      .trim()
-      .notEmpty().withMessage('Resume content is required')
-      .isLength({ min: 50, max: 50000 }).withMessage('Resume must be between 50 and 50000 characters'),
-    body('job_description')
-      .trim()
-      .notEmpty().withMessage('Job description is required')
-      .isLength({ min: 50, max: 10000 }).withMessage('Job description must be between 50 and 10000 characters'),
-    body('job_title')
-      .trim()
-      .notEmpty().withMessage('Job title is required')
-      .isLength({ max: 200 }).withMessage('Job title must not exceed 200 characters'),
-    body('optimization_level')
-      .optional()
-      .isIn(['light', 'moderate', 'aggressive'])
-      .withMessage('Invalid optimization level')
-  ],
-
-  /**
-   * Validates document download request
-   */
-  documentDownload: [
-    body('content')
-      .trim()
-      .notEmpty().withMessage('Document content is required'),
-    body('format')
-      .trim()
-      .notEmpty().withMessage('Format is required')
-      .isIn(['pdf', 'docx']).withMessage('Format must be either pdf or docx'),
-    body('filename')
-      .optional()
-      .trim()
-      .matches(/^[a-zA-Z0-9_-]+$/).withMessage('Filename can only contain letters, numbers, underscores, and hyphens')
-      .isLength({ max: 100 }).withMessage('Filename must not exceed 100 characters')
-  ],
 
   /**
    * Validates job details request
