@@ -3,8 +3,9 @@
  */
 
 const authenticateApiKey = (req, res, next) => {
-  // Skip authentication in development
-  if (process.env.NODE_ENV === 'development') {
+  // Skip authentication in development ONLY if explicitly enabled
+  if (process.env.NODE_ENV === 'development' && process.env.SKIP_AUTH === 'true') {
+    console.warn('⚠️  WARNING: Authentication is disabled in development mode');
     return next();
   }
 

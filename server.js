@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const dotenv = require('dotenv');
 
 // Load environment variables first
@@ -9,6 +10,7 @@ dotenv.config();
 const { errorHandler, notFoundHandler } = require('./src/middleware/errorHandler');
 const { generalLimiter } = require('./src/middleware/rateLimiter');
 const { authenticateApiKey } = require('./src/middleware/auth');
+const { requestIdMiddleware } = require('./src/middleware/requestId');
 
 // Import routes
 const jobRoutes = require('./src/routes/jobs.routes');
@@ -28,7 +30,20 @@ if (process.env.NODE_ENV === 'production') {
  * Middleware Setup (order matters!)
  */
 
-// 1. CORS configuration
+// 1. Request ID middleware (should be first)
+app.use(requestIdMiddleware);
+
+// 2. Helmet for security headers
+app.use(helmet({
+  contentSecurityPolicy: false, // Disable CSP for API
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  }
+}));
+
+// 3. CORS configuration
 const allowedOrigins = [
   process.env.FRONTEND_URL || 'http://localhost:5173',
   'http://localhost:3000',
@@ -53,43 +68,48 @@ app.use(cors({
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Key']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Key', 'X-Request-ID']
 }));
 
-// 2. Body parsing middleware with increased limit
+// 4. Body parsing middleware with increased limit
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// 3. General rate limiter for all API routes
+// 5. General rate limiter for all API routes
 app.use('/api', generalLimiter);
 
-// 4. Health check endpoint (before other routes)
+// 6. Health check endpoint (before other routes)
 app.get('/api/health', (req, res) => {
+  const isDevelopment = process.env.NODE_ENV === 'development';
+  
   res.json({
     success: true,
     data: {
       status: 'ok',
       timestamp: Date.now(),
       environment: process.env.NODE_ENV || 'development',
-      services: {
-        rapidapi: !!process.env.RAPIDAPI_KEY,
-        gemini: !!process.env.GEMINI_API_KEY,
-        port: process.env.PORT || 3001
-      }
+      // Only expose service details in development
+      ...(isDevelopment && {
+        services: {
+          rapidapi: !!process.env.RAPIDAPI_KEY,
+          gemini: !!process.env.GEMINI_API_KEY,
+          port: process.env.PORT || 3001
+        }
+      })
     }
   });
 });
 
-// 5. API Authentication (for protected routes)
+// 7. API Authentication (for protected routes)
 app.use('/api/jobs', authenticateApiKey);
 
-// 6. Mount API routes
+// 8. Mount API routes
 app.use('/api/jobs', jobRoutes);
 
-// 7. 404 handler (after all routes)
+// 9. 404 handler (after all routes)
 app.use(notFoundHandler);
 
-// 8. Global error handler (must be last!)
+// 10. Global error handler (must be last!)
 app.use(errorHandler);
 
 /**
