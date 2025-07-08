@@ -1,6 +1,6 @@
-# Jobotic Backend
+# Jobotic Backend - Job Search & Matching API
 
-AI-powered job matching platform backend that helps job seekers find perfect matches and optimize their resumes for specific positions.
+A focused Node.js/Express backend service for job search and AI-powered job matching. This service integrates with JSearch API to provide comprehensive job search functionality with intelligent matching capabilities.
 
 ## 🎯 **For Frontend Engineer - Quick Start**
 
