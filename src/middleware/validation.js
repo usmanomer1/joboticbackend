@@ -131,7 +131,12 @@ const validators = {
     body('resumeText')
       .trim()
       .notEmpty().withMessage('Resume text content is required')
-      .isLength({ min: 50, max: 50000 }).withMessage('Resume text must be between 50 and 50000 characters'),
+      .isLength({ min: 50, max: 50000 }).withMessage('Resume text must be between 50 and 50000 characters')
+      .customSanitizer(value => {
+        // Remove any potential script tags or malicious content
+        return value.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+                   .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '');
+      }),
     
     // Query is optional, but if not provided, jobTitle and location are required
     body('query')

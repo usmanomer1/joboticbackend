@@ -10,19 +10,33 @@
  */
 const logError = (err, req) => {
   const timestamp = new Date().toISOString();
+  
+  // Sanitize sensitive data from request body
+  const sanitizedBody = req.body ? { ...req.body } : {};
+  delete sanitizedBody.resumeText;
+  delete sanitizedBody.resume;
+  delete sanitizedBody.password;
+  delete sanitizedBody.apiKey;
+  delete sanitizedBody.token;
+  
+  // Sanitize headers
+  const sanitizedHeaders = {
+    'user-agent': req.headers['user-agent'],
+    'content-type': req.headers['content-type'],
+    'content-length': req.headers['content-length']
+  };
+  
   const errorLog = {
     timestamp,
+    requestId: req.id || 'no-request-id',
     method: req.method,
     url: req.originalUrl,
     message: err.message,
-    stack: err.stack,
-    body: req.body,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    body: Object.keys(sanitizedBody).length > 0 ? sanitizedBody : undefined,
     params: req.params,
     query: req.query,
-    headers: {
-      'user-agent': req.headers['user-agent'],
-      'content-type': req.headers['content-type']
-    }
+    headers: sanitizedHeaders
   };
   
   console.error('[ERROR]', JSON.stringify(errorLog, null, 2));
@@ -89,6 +103,7 @@ const errorHandler = (err, req, res, next) => {
   const errorResponse = {
     success: false,
     error: message,
+    requestId: req.id || 'no-request-id',
     ...(isDevelopment && { 
       details: {
         ...details,
