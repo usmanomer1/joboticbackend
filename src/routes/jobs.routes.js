@@ -158,11 +158,21 @@ router.post('/match',
       .optional()
       .isIn(['all', 'today', '3days', 'week', 'month']).withMessage('Invalid date posted value'),
     
+    body('preferences.numPages')
+      .optional()
+      .isInt({ min: 1, max: 10 }).withMessage('Number of pages must be between 1 and 10'),
+    
+    body('preferences.minScore')
+      .optional()
+      .isInt({ min: 0, max: 100 }).withMessage('Minimum score must be between 0 and 100'),
+    
     // Legacy flat parameters
     body('query').optional().trim(),
     body('jobTitle').optional().trim(),
     body('location').optional().trim(),
     body('page').optional().isInt({ min: 1 }).toInt(),
+    body('num_pages').optional().isInt({ min: 1, max: 10 }).toInt(),
+    body('min_score').optional().isInt({ min: 0, max: 100 }).toInt(),
     body('date_posted').optional().isIn(['all', 'today', '3days', 'week', 'month']),
     body('remote_jobs_only').optional().isBoolean().toBoolean(),
     body('employment_types').optional().isArray(),
@@ -182,11 +192,12 @@ router.post('/match',
       location: preferences.location || req.body.location,
       keywords: preferences.keywords || [],
       page: req.body.page || 1,
-      num_pages: Math.min(req.body.num_pages || 2, 2), // Max 2 pages for AI matching
+      num_pages: Math.min(req.body.num_pages || 5, 10), // Default 5 pages (50 jobs), max 10 pages (100 jobs)
       date_posted: preferences.datePosted || req.body.date_posted || 'all',
       remote_jobs_only: preferences.remote || req.body.remote_jobs_only || false,
       employment_types: preferences.employmentTypes || req.body.employment_types || [],
-      job_requirements: preferences.jobRequirements || req.body.job_requirements || []
+      job_requirements: preferences.jobRequirements || req.body.job_requirements || [],
+      min_score: preferences.minScore || req.body.min_score || 0 // Optional minimum match score filter
     };
     
     // Build search query
@@ -313,6 +324,15 @@ router.post('/match',
       );
     }
     
+    // Apply minimum score filter if specified
+    let filteredJobs = matchedJobs || [];
+    let preFilterCount = filteredJobs.length;
+    
+    if (searchParams.min_score > 0 && !matchError) {
+      filteredJobs = filteredJobs.filter(job => job.match_score >= searchParams.min_score);
+      console.log(`Applied min_score filter: ${preFilterCount} jobs -> ${filteredJobs.length} jobs (min_score: ${searchParams.min_score})`);
+    }
+    
     // Calculate timing
     const totalDuration = Date.now() - startTime;
     
@@ -320,9 +340,10 @@ router.post('/match',
     const response = {
       success: true,
       data: {
-        jobs: matchedJobs || [],
+        jobs: filteredJobs,
         totalFound: searchResults?.totalResults || 0,
-        totalMatched: matchedJobs?.length || 0,
+        totalMatched: preFilterCount, // Total jobs before filtering
+        totalFiltered: filteredJobs.length, // Jobs after filtering
         currentPage: searchParams.page,
         totalPages: searchResults?.totalPages || 1,
         searchCriteria: {
@@ -333,7 +354,8 @@ router.post('/match',
           datePosted: searchParams.date_posted,
           remote: searchParams.remote_jobs_only,
           employmentTypes: searchParams.employment_types,
-          requirements: searchParams.job_requirements
+          requirements: searchParams.job_requirements,
+          minScore: searchParams.min_score
         },
         timestamp: new Date().toISOString()
       },
