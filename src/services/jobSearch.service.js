@@ -118,7 +118,7 @@ class JobSearchService {
       }
       
       if (params.remote_jobs_only) {
-        requestParams.remote_jobs_only = true;
+        requestParams.work_from_home = true;
       }
       
       if (params.employment_types && params.employment_types.length > 0) {
@@ -352,10 +352,9 @@ class JobSearchService {
     try {
       console.log('Searching jobs for AI matching:', params.query);
       
-      // Force 2 pages to get up to 20 jobs
+      // Use the num_pages from params (already validated in routes)
       const searchParams = {
         ...params,
-        num_pages: Math.min(params.num_pages || 2, 2), // Max 2 pages
         page: params.page || 1
       };
       
