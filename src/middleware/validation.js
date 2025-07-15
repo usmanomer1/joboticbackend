@@ -110,9 +110,9 @@ const validators = {
       .optional()
       .isArray().withMessage('Job requirements must be an array')
       .custom((value) => {
-        const validRequirements = ['under_3_years_experience', 'more_than_3_years_experience', 'no_experience', 'no_degree'];
+        const validRequirements = ['under_3_years_exp', 'more_than_3_years_exp', 'no_exp', 'no_degree', 'fair_chance'];
         return value.every(req => validRequirements.includes(req));
-      }).withMessage('Job requirements must contain only: under_3_years_experience, more_than_3_years_experience, no_experience, no_degree'),
+      }).withMessage('Job requirements must contain only: under_3_years_exp, more_than_3_years_exp, no_exp, no_degree, fair_chance'),
     
     // Custom sanitizer to build query from jobTitle and location if needed
     body().custom((value, { req }) => {
@@ -181,9 +181,9 @@ const validators = {
       .optional()
       .isArray().withMessage('Job requirements must be an array')
       .custom((value) => {
-        const validRequirements = ['under_3_years_experience', 'more_than_3_years_experience', 'no_experience', 'no_degree'];
+        const validRequirements = ['under_3_years_exp', 'more_than_3_years_exp', 'no_exp', 'no_degree', 'fair_chance'];
         return value.every(req => validRequirements.includes(req));
-      }).withMessage('Job requirements must contain only: under_3_years_experience, more_than_3_years_experience, no_experience, no_degree'),
+      }).withMessage('Job requirements must contain only: under_3_years_exp, more_than_3_years_exp, no_exp, no_degree, fair_chance'),
     
     // Pagination
     body('page')

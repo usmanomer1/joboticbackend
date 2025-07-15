@@ -274,7 +274,7 @@ Compensation:
     seniorLevel: {
       jobTitle: 'senior software engineer',
       location: 'New York, NY',
-      jobRequirements: ['more_than_3_years_experience']
+      jobRequirements: ['more_than_3_years_exp']
     }
   },
 

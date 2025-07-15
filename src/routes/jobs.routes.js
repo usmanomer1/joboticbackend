@@ -4,13 +4,16 @@
  */
 
 const router = require('express').Router();
+const crypto = require('crypto');
 const { body } = require('express-validator');
 const jobSearchService = require('../services/jobSearch.service');
 const aiMatchingService = require('../services/aiMatching.service');
+const usageTrackingService = require('../services/usageTracking.service');
 const cache = require('../utils/cache');
 const { validate, validators } = require('../middleware/validation');
 const { asyncHandler, AppError } = require('../middleware/errorHandler');
 const { aiLimiter } = require('../middleware/rateLimiter');
+const { authenticateSupabaseUser } = require('../middleware/supabaseAuth');
 
 /**
  * @route   POST /api/jobs/search
@@ -115,6 +118,7 @@ router.post('/search',
  * }
  */
 router.post('/match',
+  authenticateSupabaseUser, // Require Supabase authentication
   aiLimiter, // Apply AI rate limiter
   validate([
     // Support both new structure (resumeText + preferences) and legacy (resume + flat params)
@@ -176,10 +180,41 @@ router.post('/match',
     body('date_posted').optional().isIn(['all', 'today', '3days', 'week', 'month']),
     body('remote_jobs_only').optional().isBoolean().toBoolean(),
     body('employment_types').optional().isArray(),
-    body('job_requirements').optional().isArray()
+    body('job_requirements').optional().isArray(),
+    
+    // Session tracking
+    body('session_id').optional().isString().trim(),
+    body('offset').optional().isInt({ min: 0 }).toInt()
   ]),
   asyncHandler(async (req, res) => {
     const startTime = Date.now();
+    const userId = req.userId; // From Supabase auth middleware
+    const sessionId = req.body.session_id || crypto.randomUUID();
+    const requestedLimit = req.body.limit || 15;
+    
+    // Check user limits before processing
+    const limitCheck = await usageTrackingService.checkUserLimit(userId, requestedLimit);
+    
+    if (!limitCheck.allowed && limitCheck.limitReached) {
+      return res.status(403).json({
+        success: false,
+        error: 'Monthly job view limit reached',
+        limit_reached: true,
+        usage: {
+          plan: limitCheck.plan.name,
+          monthly_limit: limitCheck.plan.limit,
+          monthly_used: limitCheck.currentUsage,
+          remaining: limitCheck.remaining
+        }
+      });
+    }
+    
+    // Adjust limit if user has partial allowance
+    let effectiveLimit = requestedLimit;
+    if (limitCheck.partialFulfillment && limitCheck.maxAllowed) {
+      effectiveLimit = Math.min(requestedLimit, limitCheck.maxAllowed);
+      console.log(`Adjusted limit from ${requestedLimit} to ${effectiveLimit} due to plan limits`);
+    }
     
     // Extract parameters - support both new and legacy formats
     const resumeText = req.body.resumeText || req.body.resume;
@@ -378,6 +413,33 @@ router.post('/match',
     }
     
     console.log(`=== Match Request Completed in ${totalDuration}ms ===`);
+    
+    // Track usage after successful response
+    await usageTrackingService.trackJobUsage(
+      userId,
+      sessionId,
+      searchQuery,
+      filteredJobs.length,
+      {
+        filters: searchParams,
+        offset: req.body.offset || 0,
+        scores: filteredJobs.slice(0, 10).map(j => ({ 
+          id: j.job_id, 
+          score: j.match_score,
+          title: j.job_title 
+        }))
+      }
+    );
+    
+    // Add usage info to response
+    const updatedUsage = limitCheck.currentUsage + filteredJobs.length;
+    response.usage = {
+      plan: limitCheck.plan.name,
+      monthly_limit: limitCheck.plan.limit === -1 ? 'unlimited' : limitCheck.plan.limit,
+      monthly_used: updatedUsage,
+      remaining: limitCheck.plan.limit === -1 ? 'unlimited' : Math.max(0, limitCheck.plan.limit - updatedUsage)
+    };
+    response.session_id = sessionId;
     
     res.json(response);
   })
