@@ -14,6 +14,7 @@ const { requestIdMiddleware } = require('./src/middleware/requestId');
 
 // Import routes
 const jobRoutes = require('./src/routes/jobs.routes');
+const linkedinRoutes = require('./src/routes/linkedinAutomation.routes');
 
 // Import services for validation
 const geminiClient = require('./src/utils/geminiClient');
@@ -170,9 +171,11 @@ if (process.env.NODE_ENV !== 'production') {
 
 // 7. API Authentication (for protected routes)
 app.use('/api/jobs', authenticateApiKey);
+app.use('/api/linkedin', authenticateApiKey);
 
 // 8. Mount API routes
 app.use('/api/jobs', jobRoutes);
+app.use('/api/linkedin', linkedinRoutes);
 
 // 9. 404 handler (after all routes)
 app.use(notFoundHandler);
