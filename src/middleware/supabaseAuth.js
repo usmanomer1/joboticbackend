@@ -33,7 +33,8 @@ const authenticateSupabaseUser = async (req, res, next) => {
     
     if (error || !user) {
       console.error('Token verification failed:', error?.message || 'No user found');
-      throw new AppError('Invalid or expired authentication token', 401);
+      console.error('Error details:', error);
+      throw new AppError(error?.message || 'Invalid or expired authentication token', 401);
     }
     
     // Attach user to request object

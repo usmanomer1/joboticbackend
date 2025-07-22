@@ -4,17 +4,17 @@
  */
 
 const PLAN_LIMITS = {
-  // Plus Plan - $10/month - 300 jobs
-  'price_1Rf2oQGkowQ7SwlfhDDuOpFk': 300,
+  // Plus Plan - $10/month - Temporarily unlimited
+  'price_1Rf2oQGkowQ7SwlfhDDuOpFk': -1,
   
-  // Pro Plan - $25/month - 700 jobs  
-  'price_1Rf2nJGkowQ7Swlfwvc3CBO8': 700,
+  // Pro Plan - $25/month - Temporarily unlimited  
+  'price_1Rf2nJGkowQ7Swlfwvc3CBO8': -1,
   
   // Max Plan - $50/month - Unlimited
   'price_1Rf2owGkowQ7SwlfEG4UKU8c': -1,
   
-  // Free users - 100 jobs
-  'default': 100
+  // Free users - Temporarily unlimited
+  'default': -1
 };
 
 const PLAN_NAMES = {

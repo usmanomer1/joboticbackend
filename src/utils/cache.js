@@ -242,6 +242,41 @@ const cacheWrapper = {
    */
   makeKey(...parts) {
     return parts.filter(Boolean).join(':');
+  },
+
+  /**
+   * Clear all cache entries matching a pattern
+   * @param {string} pattern - Pattern to match (e.g., 'jobs:' for all job-related keys)
+   * @returns {number} Number of deleted keys
+   */
+  clearPattern(pattern) {
+    try {
+      const keys = cache.keys();
+      let deletedCount = 0;
+      
+      keys.forEach(key => {
+        if (key.includes(pattern)) {
+          const deleted = cache.del(key);
+          if (deleted > 0) {
+            deletedCount++;
+          }
+        }
+      });
+      
+      logCacheOperation('clear-pattern', pattern, { 
+        deletedCount,
+        totalKeys: keys.length 
+      });
+      
+      return deletedCount;
+    } catch (error) {
+      console.error('Cache clear pattern error:', error);
+      logCacheOperation('error', pattern, { 
+        operation: 'clearPattern',
+        error: error.message 
+      });
+      return 0;
+    }
   }
 };
 
