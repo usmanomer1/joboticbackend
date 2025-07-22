@@ -44,7 +44,8 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const executeWithRetry = async (requestFn, retries = RETRY_CONFIG.MAX_RETRIES) => {
   try {
     const response = await requestFn();
-    return response.data;
+    // Return the full axios response to access headers and other metadata
+    return response;
   } catch (error) {
     const isRateLimit = error.response?.status === 429;
     const isServerError = error.response?.status >= 500;
@@ -69,6 +70,155 @@ const executeWithRetry = async (requestFn, retries = RETRY_CONFIG.MAX_RETRIES) =
  * Job search service class
  */
 class JobSearchService {
+  /**
+   * Get quick job count for a search query
+   * @param {Object} params - Search parameters
+   * @returns {Promise<Object>} Count information
+   */
+  async getJobCount(params) {
+    try {
+      // Build cache key for count - include location to prevent cross-contamination
+      const cacheKey = cache.makeKey(
+        'jobs:count',
+        params.query,
+        params.location || 'NO_LOCATION',
+        params.date_posted || 'all',
+        params.remote_jobs_only || false,
+        JSON.stringify(params.employment_types || []),
+        JSON.stringify(params.job_requirements || []),
+        params.country || 'us'
+      );
+      
+      // Check cache first
+      const cachedCount = cache.get(cacheKey);
+      if (cachedCount) {
+        console.log('Returning cached job count');
+        return cachedCount;
+      }
+      
+      // Make a minimal request to get count (1 page, minimal data)
+      const requestParams = {
+        query: params.query,
+        page: 1,
+        num_pages: 1,
+        country: params.country || 'us'
+      };
+      
+      // Add location if provided
+      if (params.location && params.location.trim()) {
+        if (!params.query.toLowerCase().includes(params.location.toLowerCase())) {
+          requestParams.query = `${params.query} ${params.location}`;
+        }
+      }
+      
+      // Add filters
+      if (params.date_posted && params.date_posted !== 'all') {
+        requestParams.date_posted = params.date_posted;
+      }
+      if (params.remote_jobs_only) {
+        requestParams.work_from_home = true;
+      }
+      if (params.employment_types && params.employment_types.length > 0) {
+        requestParams.employment_types = params.employment_types.join(',');
+      }
+      if (params.job_requirements && params.job_requirements.length > 0) {
+        requestParams.job_requirements = params.job_requirements.join(',');
+      }
+      
+      console.log('Getting job count with params:', requestParams);
+      
+      // Execute request
+      const response = await executeWithRetry(() => 
+        axios.get(`${JSEARCH_BASE_URL}/search`, {
+          headers: JSEARCH_HEADERS,
+          params: requestParams
+        })
+      );
+      
+      const responseData = response.data;
+      
+      // Log the actual response structure for debugging
+      console.log('JSearch count response structure:', {
+        has_parameters: !!responseData?.parameters,
+        total_results: responseData?.parameters?.total_results,
+        totalResults: responseData?.parameters?.totalResults,
+        data_length: responseData?.data?.length,
+        request_params: responseData?.request_parameters
+      });
+      
+      // Extract total from the correct location - DO NOT use data.length as fallback
+      const totalResults = responseData?.parameters?.total_results || 
+                          responseData?.parameters?.totalResults || 
+                          responseData?.request_parameters?.total_results ||
+                          0; // Never use data.length as it's just current page
+      
+      // If we got 0, but have data, it means the API structure might be different
+      if (totalResults === 0 && responseData?.data?.length > 0) {
+        console.warn('Total results is 0 but data exists - API response structure may have changed');
+        // In this case, assume there could be more pages
+        // Return a high estimate to allow pagination
+        const estimatedTotal = params.num_pages ? params.num_pages * 10 : 100;
+        console.log(`Using estimated total of ${estimatedTotal} to allow pagination`);
+        
+        const countInfo = {
+          total: estimatedTotal,
+          query: params.query,
+          resultsPerPage: 10,
+          totalPages: params.num_pages || 10,
+          estimated: true
+        };
+        
+        // Cache for shorter time since it's estimated
+        cache.set(cacheKey, countInfo, 60); // 1 minute cache
+        return countInfo;
+      }
+      
+      const countInfo = {
+        total: totalResults,
+        query: params.query,
+        resultsPerPage: 10,
+        totalPages: Math.ceil(totalResults / 10)
+      };
+      
+      // Cache for 10 minutes
+      cache.set(cacheKey, countInfo, 600);
+      
+      return countInfo;
+    } catch (error) {
+      console.error('Job count error:', error.response?.data || error.message);
+      // Return estimate on error
+      return {
+        total: 0,
+        query: params.query,
+        resultsPerPage: 10,
+        totalPages: 0,
+        error: true
+      };
+    }
+  }
+
+  /**
+   * Search for a single page of jobs
+   * @param {Object} params - Search parameters
+   * @param {number} page - Page number to fetch
+   * @returns {Promise<Object>} Single page of results
+   */
+  async searchSinglePage(params, page = 1) {
+    try {
+      // Use existing searchJobs but force single page
+      const singlePageParams = {
+        ...params,
+        page: page,
+        num_pages: 1 // Force single page
+      };
+      
+      return await this.searchJobs(singlePageParams);
+    } catch (error) {
+      console.error(`Error fetching page ${page}:`, error);
+      throw error;
+    }
+  }
+
   /**
    * Search for jobs using JSearch API
    * @param {Object} params - Search parameters
@@ -112,6 +262,14 @@ class JobSearchService {
         country: params.country || 'us'
       };
       
+      // Add location if provided separately
+      if (params.location && params.location.trim()) {
+        // If location is not already in the query, add it
+        if (!params.query.toLowerCase().includes(params.location.toLowerCase())) {
+          requestParams.query = `${params.query} ${params.location}`;
+        }
+      }
+      
       // Add optional parameters
       if (params.date_posted && params.date_posted !== 'all') {
         requestParams.date_posted = params.date_posted;
@@ -129,6 +287,9 @@ class JobSearchService {
         requestParams.job_requirements = params.job_requirements.join(',');
       }
       
+      // Log the actual parameters being sent to JSearch
+      console.log('JSearch API parameters:', requestParams);
+      
       // Execute request with retry
       const response = await executeWithRetry(() => 
         axios.get(`${JSEARCH_BASE_URL}/search`, {
@@ -137,17 +298,59 @@ class JobSearchService {
         })
       );
       
+      // Log basic response info for monitoring
+      console.log(`JSearch API returned ${response.data?.data?.length || 0} jobs for page ${params.page || 1}`);
+      
+      // JSearch returns data in response.data
+      const responseData = response.data;
+      
+      // Handle different response formats from JSearch
+      let jobs = [];
+      let parameters = {};
+      let totalResults = 0;
+      
+      if (responseData) {
+        if (responseData.data && Array.isArray(responseData.data)) {
+          // Response has data property with jobs array
+          jobs = responseData.data;
+          parameters = responseData.parameters || {};
+          
+          // Check various possible field names for total results
+          totalResults = parameters.total_results || 
+                        parameters.totalResults || 
+                        parameters.total || 
+                        parameters.count || 
+                        0;
+          
+          // If still no total results and we got a full page, estimate
+          if (totalResults === 0 && jobs.length >= 10) {
+            // Estimate based on current page - assume at least 10 more pages if we got full results
+            totalResults = (params.page || 1) * 10 + 100;
+          }
+        } else if (Array.isArray(responseData)) {
+          // Response is directly an array of jobs (shouldn't happen with JSearch)
+          jobs = responseData;
+          totalResults = jobs.length >= 10 ? jobs.length * 10 : jobs.length;
+        }
+      }
+      
+      // Calculate total pages and hasMore flag
+      const currentPage = params.page || 1;
+      const hasMoreResults = jobs.length >= 10; // If we got 10 results, there might be more
+      
       // Transform and enhance response
       const transformedResponse = {
         success: true,
-        data: response.data || [],
-        parameters: response.parameters || {},
-        request_id: response.request_id,
-        status: response.status || 'OK',
-        jobs: (response.data || []).map(job => this.transformJobResponse(job)),
-        totalResults: response.parameters?.total_results || 0,
-        currentPage: params.page || 1,
-        totalPages: Math.ceil((response.parameters?.total_results || 0) / 10)
+        data: jobs,
+        parameters: parameters,
+        request_id: responseData?.request_id,
+        status: responseData?.status || 'OK',
+        jobs: jobs.map(job => this.transformJobResponse(job)),
+        totalResults: totalResults || jobs.length,
+        currentPage: currentPage,
+        totalPages: totalResults > 0 ? Math.ceil(totalResults / 10) : (hasMoreResults ? currentPage + 1 : currentPage),
+        hasMore: hasMoreResults,
+        resultsPerPage: 10
       };
       
       // Cache the results
@@ -207,11 +410,12 @@ class JobSearchService {
       );
       
       // Transform response
+      const responseData = response.data;
       const jobDetails = {
         success: true,
-        data: response.data?.[0] || null,
-        request_id: response.request_id,
-        status: response.status || 'OK'
+        data: responseData?.data?.[0] || null,
+        request_id: responseData?.request_id,
+        status: responseData?.status || 'OK'
       };
       
       if (jobDetails.data) {
@@ -268,21 +472,22 @@ class JobSearchService {
       );
       
       // Transform response
+      const responseData = response.data;
       const salaryData = {
         success: true,
-        data: response.data || {},
-        request_id: response.request_id,
-        status: response.status || 'OK',
+        data: responseData?.data || {},
+        request_id: responseData?.request_id,
+        status: responseData?.status || 'OK',
         jobTitle,
         location,
         salaryEstimates: {
-          min: response.data?.min_salary || null,
-          max: response.data?.max_salary || null,
-          median: response.data?.median_salary || null,
-          average: response.data?.average_salary || null,
-          currency: response.data?.currency || 'USD',
-          salaryPeriod: response.data?.salary_period || 'YEAR',
-          dataPoints: response.data?.data_points || 0,
+          min: responseData?.data?.min_salary || null,
+          max: responseData?.data?.max_salary || null,
+          median: responseData?.data?.median_salary || null,
+          average: responseData?.data?.average_salary || null,
+          currency: responseData?.data?.currency || 'USD',
+          salaryPeriod: responseData?.data?.salary_period || 'YEAR',
+          dataPoints: responseData?.data?.data_points || 0,
           lastUpdated: new Date().toISOString()
         }
       };
@@ -401,10 +606,21 @@ class JobSearchService {
   /**
    * Enrich jobs with salary estimates
    * @param {Array} jobs - Array of job objects
+   * @param {Object} options - Enrichment options
+   * @param {boolean} options.streaming - Whether this is for streaming response
+   * @param {number} options.timeout - Timeout per salary request in ms
    * @returns {Promise<Array>} Jobs with salary data
    */
-  async enrichJobsWithSalary(jobs) {
+  async enrichJobsWithSalary(jobs, options = {}) {
     if (!jobs || jobs.length === 0) return jobs;
+    
+    const { streaming = false, timeout = 5000 } = options;
+    
+    // Skip salary enrichment for streaming requests to prevent timeouts
+    if (streaming) {
+      console.log('Skipping salary enrichment for streaming request');
+      return jobs;
+    }
     
     try {
       // Extract unique job title/location combinations
@@ -429,20 +645,37 @@ class JobSearchService {
       
       console.log(`Enriching ${salaryQueries.size} unique job/location combinations with salary data`);
       
-      // Process in batches of 5
+      // Limit total enrichment time to 30 seconds
+      const enrichmentStartTime = Date.now();
+      const MAX_ENRICHMENT_TIME = 30000;
+      
+      // Process in larger batches with higher parallelism
       const salaryResults = new Map();
       const queries = Array.from(salaryQueries.values());
+      const BATCH_SIZE = 10; // Increased from 5
       
-      for (let i = 0; i < queries.length; i += 5) {
-        const batch = queries.slice(i, i + 5);
+      for (let i = 0; i < queries.length; i += BATCH_SIZE) {
+        // Check if we've exceeded time limit
+        if (Date.now() - enrichmentStartTime > MAX_ENRICHMENT_TIME) {
+          console.log('Salary enrichment time limit reached, returning partial results');
+          break;
+        }
         
-        // Fetch salary data in parallel for this batch
+        const batch = queries.slice(i, i + BATCH_SIZE);
+        
+        // Fetch salary data in parallel with timeout
         const batchPromises = batch.map(async query => {
           try {
-            const salaryData = await this.getEstimatedSalary(
-              query.jobTitle,
-              query.location
-            );
+            // Create a timeout promise
+            const timeoutPromise = new Promise((_, reject) => {
+              setTimeout(() => reject(new Error('Salary request timeout')), timeout);
+            });
+            
+            // Race between salary fetch and timeout
+            const salaryData = await Promise.race([
+              this.getEstimatedSalary(query.jobTitle, query.location),
+              timeoutPromise
+            ]);
             
             if (salaryData.success) {
               return {
@@ -458,19 +691,17 @@ class JobSearchService {
           }
         });
         
-        const batchResults = await Promise.all(batchPromises);
+        // Don't wait for all promises, use allSettled to continue even if some fail
+        const batchResults = await Promise.allSettled(batchPromises);
         
-        // Store results
-        batchResults.forEach(result => {
-          if (result) {
-            salaryResults.set(result.key, result.data);
+        // Store successful results
+        batchResults.forEach((result, index) => {
+          if (result.status === 'fulfilled' && result.value) {
+            salaryResults.set(result.value.key, result.value.data);
           }
         });
         
-        // Small delay between batches to avoid rate limiting
-        if (i + 5 < queries.length) {
-          await sleep(500);
-        }
+        // No delay between batches to speed up processing
       }
       
       // Apply salary data to jobs
@@ -491,7 +722,8 @@ class JobSearchService {
         return job;
       });
       
-      console.log(`Successfully enriched ${salaryResults.size} job/location combinations`);
+      const enrichmentTime = Date.now() - enrichmentStartTime;
+      console.log(`Successfully enriched ${salaryResults.size} job/location combinations in ${enrichmentTime}ms`);
       
       return enrichedJobs;
     } catch (error) {

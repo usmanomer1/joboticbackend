@@ -9,7 +9,7 @@ const cache = require('../utils/cache');
 
 // Matching configuration
 const MATCH_CONFIG = {
-  BATCH_SIZE: 10,
+  BATCH_SIZE: 5,  // Reduced from 10 to avoid Gemini token limits
   MAX_RETRIES: 3,
   RETRY_DELAY: 1000,
   CACHE_TTL: 3600, // 1 hour for match results
@@ -68,38 +68,40 @@ class AIMatchingService {
         return cachedResults;
       }
       
-      // Process jobs in batches
+      // Process jobs in batches with parallel processing
       const allMatches = [];
       const batches = this.createBatches(jobs, MATCH_CONFIG.BATCH_SIZE);
       
-      console.log(`Processing ${batches.length} batches of jobs`);
+      console.log(`Processing ${batches.length} batches of jobs (${jobs.length} total jobs)`);
       
-      for (let i = 0; i < batches.length; i++) {
-        const batch = batches[i];
-        console.log(`Processing batch ${i + 1}/${batches.length} with ${batch.length} jobs`);
+      // Process batches in parallel with concurrency limit
+      const PARALLEL_LIMIT = 8; // Increased from 5 since batches are now smaller (5 jobs each)
+      
+      for (let i = 0; i < batches.length; i += PARALLEL_LIMIT) {
+        const batchGroup = batches.slice(i, i + PARALLEL_LIMIT);
+        console.log(`Processing batch group ${Math.floor(i/PARALLEL_LIMIT) + 1}/${Math.ceil(batches.length/PARALLEL_LIMIT)} (${batchGroup.length} parallel batches)`);
         
-        try {
-          const batchMatches = await this.processBatch(batch, resumeText);
-          allMatches.push(...batchMatches);
-          
-          // Small delay between batches to avoid rate limiting
-          if (i < batches.length - 1) {
-            await sleep(1000);
+        const batchPromises = batchGroup.map(async (batch, index) => {
+          const batchNumber = i + index + 1;
+          try {
+            console.log(`Starting batch ${batchNumber}/${batches.length} with ${batch.length} jobs`);
+            const batchMatches = await this.processBatch(batch, resumeText);
+            console.log(`Completed batch ${batchNumber}/${batches.length}`);
+            return batchMatches;
+          } catch (error) {
+            console.error(`Failed to process batch ${batchNumber}:`, error.message);
+            // Return fallback matches for failed batch
+            return batch.map(job => this.createFallbackMatch(job, resumeText));
           }
-        } catch (error) {
-          console.error(`Failed to process batch ${i + 1}:`, error.message);
-          // Continue with other batches even if one fails
-          // Add default scores for failed batch
-          const defaultMatches = batch.map(job => ({
-            jobId: job.job_id,
-            score: 0,
-            matchLabel: 'PROCESSING ERROR',
-            matchReasons: ['Unable to analyze this job at the moment'],
-            missingSkills: [],
-            keyStrengths: [],
-            error: true
-          }));
-          allMatches.push(...defaultMatches);
+        });
+        
+        // Wait for all batches in this group to complete
+        const groupResults = await Promise.all(batchPromises);
+        groupResults.forEach(matches => allMatches.push(...matches));
+        
+        // Small delay between batch groups to avoid rate limiting
+        if (i + PARALLEL_LIMIT < batches.length) {
+          await sleep(500);
         }
       }
       
@@ -125,8 +127,7 @@ class AIMatchingService {
         };
       });
       
-      // Sort by score descending
-      enrichedJobs.sort((a, b) => b.match_score - a.match_score);
+      // Keep original order - don't sort by score since we're returning ALL jobs
       
       // Cache the results
       cache.set(cacheKey, enrichedJobs, MATCH_CONFIG.CACHE_TTL);
@@ -159,8 +160,14 @@ class AIMatchingService {
         maxOutputTokens: 2048
       });
       
+      // Check if response is valid before parsing
+      if (!response || typeof response !== 'object' || !response.matches) {
+        console.error('Invalid AI response structure:', JSON.stringify(response).substring(0, 100));
+        throw new Error('AI returned invalid response structure');
+      }
+      
       // Parse and validate response
-      const matches = this.parseAIResponse(response, batch);
+      const matches = this.parseAIResponse(response, batch, resumeText);
       
       return matches;
     } catch (error) {
@@ -186,16 +193,9 @@ class AIMatchingService {
         return this.processBatch(batch, resumeText, retries - 1);
       }
       
-      // Return default scores for this batch if all retries failed
-      console.error('All retries failed, returning default scores');
-      return batch.map(job => ({
-        jobId: job.job_id,
-        score: 0,
-        matchLabel: 'ERROR',
-        matchReasons: ['Unable to process job match due to technical error'],
-        missingSkills: [],
-        keyStrengths: []
-      }));
+      // Return fallback analysis for this batch if all retries failed
+      console.error('All retries failed, using fallback analysis');
+      return batch.map(job => this.createFallbackMatch(job, resumeText));
     }
   }
   
@@ -206,13 +206,17 @@ class AIMatchingService {
    * @returns {string} Formatted prompt
    */
   prepareBatchPrompt(jobs, resumeText) {
+    // Truncate resume more aggressively for large batches
+    const resumeTruncateLength = jobs.length > 5 ? 1000 : 2000;
+    const jobDescriptionLength = jobs.length > 5 ? 300 : 500;
+    
     // Include comprehensive job data for better AI analysis
     const simplifiedJobs = jobs.map(job => ({
       id: job.job_id,
       title: job.job_title,
       company: job.employer_name,
       companyType: job.employer_company_type,
-      description: this.truncateText(job.job_description_clean || job.job_description || '', 500),
+      description: this.truncateText(job.job_description_clean || job.job_description || '', jobDescriptionLength),
       highlights: job.job_highlights ? {
         qualifications: job.job_highlights.Qualifications || [],
         responsibilities: job.job_highlights.Responsibilities || [],
@@ -266,7 +270,7 @@ ENHANCED ANALYSIS FACTORS:
 - Prioritize jobs expiring soon if score is similar
 
 Resume:
-${this.truncateText(resumeText, 2000)}
+${this.truncateText(resumeText, resumeTruncateLength)}
 
 Jobs to analyze (with full enriched data):
 ${JSON.stringify(simplifiedJobs, null, 2)}
@@ -306,7 +310,7 @@ RULES:
    * @param {Array} batch - Original job batch for validation
    * @returns {Array} Validated match results
    */
-  parseAIResponse(response, batch) {
+  parseAIResponse(response, batch, resumeText) {
     if (!response || !response.matches || !Array.isArray(response.matches)) {
       throw new AppError('Invalid AI response format', 500);
     }
@@ -345,15 +349,10 @@ RULES:
     // Add default matches for any missing jobs
     for (const job of batch) {
       if (!validMatches.find(m => m.jobId === job.job_id)) {
-        console.warn(`No match data for job ${job.job_id}, adding default`);
-        validMatches.push({
-          jobId: job.job_id,
-          score: 50,
-          matchLabel: 'FAIR MATCH',
-          matchReasons: ['Unable to fully analyze match'],
-          missingSkills: [],
-          keyStrengths: []
-        });
+        console.warn(`No match data for job ${job.job_id}, creating fallback analysis`);
+        // Create a meaningful fallback analysis
+        const fallbackMatch = this.createFallbackMatch(job, resumeText);
+        validMatches.push(fallbackMatch);
       }
     }
     
@@ -422,6 +421,122 @@ RULES:
       hash = hash & hash; // Convert to 32-bit integer
     }
     return Math.abs(hash).toString(36);
+  }
+  
+  /**
+   * Create a fallback match when AI analysis fails
+   * @param {Object} job - Job object
+   * @param {string} resumeText - Resume text
+   * @returns {Object} Fallback match object
+   */
+  createFallbackMatch(job, resumeText) {
+    // Extract key terms from job and resume for basic matching
+    const jobTitle = (job.job_title || '').toLowerCase();
+    const jobDescription = this.stripHtml(job.job_description || '').toLowerCase();
+    const resumeLower = resumeText.toLowerCase();
+    
+    // Extract skills from job
+    const jobSkills = [];
+    if (job.job_required_skills) {
+      jobSkills.push(...job.job_required_skills);
+    }
+    if (job.job_highlights?.Qualifications) {
+      job.job_highlights.Qualifications.forEach(qual => {
+        // Extract potential skills from qualifications - expanded list
+        const skillMatches = qual.match(/\b(python|java|javascript|typescript|react|angular|vue|node|express|django|flask|spring|sql|nosql|mongodb|postgresql|mysql|redis|aws|azure|gcp|docker|kubernetes|jenkins|ci\/cd|git|github|gitlab|agile|scrum|kanban|jira|html|css|sass|bootstrap|tailwind|webpack|npm|yarn|rest|api|graphql|microservices|serverless|terraform|ansible|linux|bash|shell|powershell|c\+\+|c#|\.net|ruby|rails|php|laravel|symfony|go|golang|rust|swift|kotlin|android|ios|flutter|react native|xamarin|unity|unreal|machine learning|ml|ai|tensorflow|pytorch|keras|scikit-learn|pandas|numpy|jupyter|data science|analytics|tableau|power bi|excel|spark|hadoop|kafka|elasticsearch|logstash|kibana|grafana|prometheus|nagios|splunk|datadog|new relic)\b/gi);
+        if (skillMatches) {
+          jobSkills.push(...skillMatches);
+        }
+      });
+    }
+    
+    // Count skill matches
+    const matchedSkills = [];
+    const missingSkills = [];
+    
+    jobSkills.forEach(skill => {
+      if (resumeLower.includes(skill.toLowerCase())) {
+        matchedSkills.push(skill);
+      } else {
+        missingSkills.push(skill);
+      }
+    });
+    
+    // Calculate basic score
+    let score = 40; // Base score
+    
+    // Title match bonus
+    const titleWords = jobTitle.split(/\s+/);
+    const titleMatches = titleWords.filter(word => 
+      word.length > 3 && resumeLower.includes(word)
+    ).length;
+    score += Math.min(titleMatches * 10, 30);
+    
+    // Skills match bonus
+    if (jobSkills.length > 0) {
+      const skillMatchRatio = matchedSkills.length / jobSkills.length;
+      score += Math.round(skillMatchRatio * 30);
+    }
+    
+    // Generate match reasons
+    const matchReasons = [];
+    
+    if (titleMatches > 0) {
+      matchReasons.push(`Your experience aligns with the ${jobTitle} role`);
+    }
+    
+    if (matchedSkills.length > 0) {
+      matchReasons.push(`You have ${matchedSkills.length} of the required skills: ${matchedSkills.slice(0, 3).join(', ')}`);
+    }
+    
+    if (job.job_is_remote && resumeLower.includes('remote')) {
+      matchReasons.push('Your remote work experience matches this remote position');
+      score += 5;
+    }
+    
+    // Location match
+    if (job.job_city && resumeLower.includes(job.job_city.toLowerCase())) {
+      matchReasons.push(`You have experience in ${job.job_city}`);
+      score += 5;
+    }
+    
+    // If no specific reasons found, provide general ones
+    if (matchReasons.length === 0) {
+      matchReasons.push('This role offers opportunities for professional growth');
+      if (job.employer_name) {
+        matchReasons.push(`${job.employer_name} is actively hiring for this position`);
+      }
+    }
+    
+    // Key strengths based on what we found
+    const keyStrengths = [];
+    if (matchedSkills.length > 0) {
+      keyStrengths.push(`${matchedSkills.length} matching technical skills`);
+    }
+    if (titleMatches > 0) {
+      keyStrengths.push('Relevant job title experience');
+    }
+    
+    // Ensure score is within bounds
+    score = Math.max(0, Math.min(100, score));
+    
+    return {
+      jobId: job.job_id,
+      score,
+      matchLabel: this.calculateMatchLabel(score),
+      matchReasons: matchReasons.slice(0, 4),
+      missingSkills: missingSkills.slice(0, 5),
+      keyStrengths: keyStrengths.length > 0 ? keyStrengths : ['Consider this opportunity to expand your skills']
+    };
+  }
+  
+  /**
+   * Strip HTML tags from text
+   * @param {string} html - HTML string
+   * @returns {string} Plain text
+   */
+  stripHtml(html) {
+    return html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   }
   
   /**
