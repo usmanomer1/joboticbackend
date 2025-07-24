@@ -8,12 +8,22 @@ export enum AutomationStatus {
   FAILED = 'failed'
 }
 
+export enum SessionStatus {
+  PENDING = 'pending',
+  ACTIVE = 'active',
+  PAUSED = 'paused',
+  COMPLETED = 'completed',
+  FAILED = 'failed',
+  EXPIRED = 'expired'
+}
+
 export enum InterventionType {
   LOGIN = 'login',
   CAPTCHA = 'captcha',
   TWO_FA = 'two_fa',
   BLOCKED = 'blocked',
-  RATE_LIMIT = 'rate_limit'
+  RATE_LIMIT = 'rate_limit',
+  ACCOUNT_CREATION = 'account_creation'
 }
 
 export enum ApplicationStatus {
@@ -28,9 +38,24 @@ export enum LogLevel {
   ERROR = 'error'
 }
 
+export enum AutomationEventType {
+  SESSION_STARTED = 'session:started',
+  SESSION_PAUSED = 'session:paused',
+  SESSION_RESUMED = 'session:resumed',
+  SESSION_STOPPED = 'session:stopped',
+  SESSION_COMPLETED = 'session:completed',
+  PROGRESS_UPDATED = 'progress:updated',
+  INTERVENTION_REQUIRED = 'intervention:required',
+  ERROR = 'error'
+}
+
 export interface JobSearchConfig {
-  jobTitle: string;
-  location: string;
+  // Natural language search option
+  searchPrompt?: string;
+  
+  // Traditional search fields (optional when using searchPrompt)
+  jobTitle?: string;
+  location?: string;
   experienceLevel?: string[];
   jobType?: string[];
   remote?: boolean;
@@ -39,9 +64,40 @@ export interface JobSearchConfig {
     max?: number;
   };
   targetCount?: number;
+  maxApplications?: number;  // Maximum number of applications to submit
   easyApplyOnly?: boolean;
   keywords?: string[];
   excludeKeywords?: string[];
+  
+  // Filters for job search
+  filters?: {
+    datePosted?: 'day' | 'week' | 'month';
+    jobType?: string[];
+    remote?: boolean;
+    easyApplyOnly?: boolean;
+    keywords?: string[];
+  };
+  datePosted?: 'day' | 'week' | 'month';  // When the job was posted
+  
+  // Resume handling
+  resumeUrl?: string;  // Supabase Storage URL
+  resumeMetadata?: {
+    fileName: string;
+    fileType: string;
+    extractedText?: string;  // Pre-extracted text for form filling
+  };
+  
+  // External application config
+  externalApplicationConfig?: {
+    autoCreateAccount?: boolean;
+    defaultEmail?: string;
+    defaultPassword?: string;
+    pauseOnAccountCreation?: boolean;
+  };
+  
+  // Context configuration for persistent authentication
+  useContext?: boolean;
+  createNewContext?: boolean;
 }
 
 export interface AutomationSession {
@@ -87,6 +143,19 @@ export interface JobApplication {
   application_type?: 'easy_apply' | 'external';
 }
 
+export interface JobDetails {
+  jobId: string;
+  companyName: string;
+  jobTitle: string;
+  location: string;
+  jobUrl: string;
+  isEasyApply: boolean;
+  jobDescription?: string;
+  requirements?: string[];
+  salary?: string;
+  postedDate?: string;
+}
+
 export interface AppliedJob extends JobApplication {
   id: string;
   session_id: string;
@@ -95,6 +164,7 @@ export interface AppliedJob extends JobApplication {
   application_status: ApplicationStatus;
   error_message?: string;
   response_data?: any;
+  job_details?: JobDetails;
   created_at: Date;
 }
 

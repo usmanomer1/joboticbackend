@@ -171,7 +171,8 @@ if (process.env.NODE_ENV !== 'production') {
 
 // 7. API Authentication (for protected routes)
 app.use('/api/jobs', authenticateApiKey);
-app.use('/api/linkedin', authenticateApiKey);
+// LinkedIn routes have their own authentication middleware (Bearer token)
+// app.use('/api/linkedin', authenticateApiKey);
 
 // 8. Mount API routes
 app.use('/api/jobs', jobRoutes);

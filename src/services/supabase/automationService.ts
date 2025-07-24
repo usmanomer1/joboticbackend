@@ -125,6 +125,13 @@ export class SupabaseAutomationService {
   }
 
   /**
+   * Get session by ID (public method)
+   */
+  async getSession(sessionId: string): Promise<AutomationSession | null> {
+    return this.getSessionById(sessionId);
+  }
+
+  /**
    * Get active sessions for a user
    */
   async getSessionsByUser(userId: string, includeCompleted = false): Promise<AutomationSession[]> {
@@ -333,6 +340,173 @@ export class SupabaseAutomationService {
   }
 
   /**
+   * Alias for recordJobApplication to match LinkedIn automation service
+   */
+  async saveJobApplication(
+    sessionId: string,
+    applicationData: {
+      id: string;
+      job_id: string;
+      job_title: string;
+      company_name: string;
+      location?: string;
+      job_description?: string;
+      status: 'applied' | 'failed' | 'skipped';
+      skip_reason?: string;
+      error_message?: string;
+      applied_at?: string;
+    }
+  ): Promise<void> {
+    try {
+      // Get session to find user_id
+      const { data: session, error: sessionError } = await this.supabase
+        .from('automation_sessions')
+        .select('user_id')
+        .eq('id', sessionId)
+        .single();
+
+      if (sessionError || !session) {
+        throw new SessionNotFoundError(sessionId);
+      }
+
+      // Map application data to JobApplication format
+      const jobDetails: JobApplication = {
+        job_id: applicationData.job_id,
+        company: applicationData.company_name,
+        title: applicationData.job_title,
+        location: applicationData.location,
+        job_url: '', // Will be updated later if available
+        application_type: 'easy_apply'
+      };
+
+      // Map status
+      const status = applicationData.status === 'applied' 
+        ? ApplicationStatus.SUCCESS 
+        : applicationData.status === 'failed'
+        ? ApplicationStatus.FAILED
+        : ApplicationStatus.ALREADY_APPLIED;
+
+      await this.recordJobApplication(
+        sessionId,
+        session.user_id,
+        jobDetails,
+        status,
+        applicationData.error_message || applicationData.skip_reason
+      );
+    } catch (error) {
+      console.error('Save job application error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Save comprehensive job details extracted from the job page
+   */
+  async saveJobDetails(
+    sessionId: string,
+    jobDetails: {
+      jobId: string;
+      companyName: string;
+      jobTitle: string;
+      location: string;
+      jobUrl: string;
+      isEasyApply: boolean;
+      jobDescription?: string;
+      requirements?: string[];
+      salary?: string;
+      postedDate?: string;
+      experienceLevel?: string;
+      employmentType?: string;
+      benefits?: string[];
+      extractedAt: string;
+    }
+  ): Promise<void> {
+    try {
+      // Check if job details already exist
+      const { data: existing, error: checkError } = await this.supabase
+        .from('job_details')
+        .select('id')
+        .eq('job_id', jobDetails.jobId)
+        .single();
+
+      if (!checkError && existing) {
+        // Update existing record
+        const { error } = await this.supabase
+          .from('job_details')
+          .update({
+            company_name: jobDetails.companyName,
+            job_title: jobDetails.jobTitle,
+            location: jobDetails.location,
+            job_url: jobDetails.jobUrl,
+            is_easy_apply: jobDetails.isEasyApply,
+            job_description: jobDetails.jobDescription,
+            requirements: jobDetails.requirements,
+            salary_info: jobDetails.salary,
+            posted_date: jobDetails.postedDate,
+            experience_level: jobDetails.experienceLevel,
+            employment_type: jobDetails.employmentType,
+            benefits: jobDetails.benefits,
+            extracted_at: jobDetails.extractedAt,
+            updated_at: new Date().toISOString()
+          })
+          .eq('job_id', jobDetails.jobId);
+
+        if (error) {
+          throw new AutomationError('Failed to update job details', 'UPDATE_JOB_DETAILS_ERROR', error);
+        }
+      } else {
+        // Insert new record
+        const { error } = await this.supabase
+          .from('job_details')
+          .insert({
+            session_id: sessionId,
+            job_id: jobDetails.jobId,
+            company_name: jobDetails.companyName,
+            job_title: jobDetails.jobTitle,
+            location: jobDetails.location,
+            job_url: jobDetails.jobUrl,
+            is_easy_apply: jobDetails.isEasyApply,
+            job_description: jobDetails.jobDescription,
+            requirements: jobDetails.requirements,
+            salary_info: jobDetails.salary,
+            posted_date: jobDetails.postedDate,
+            experience_level: jobDetails.experienceLevel,
+            employment_type: jobDetails.employmentType,
+            benefits: jobDetails.benefits,
+            extracted_at: jobDetails.extractedAt
+          });
+
+        if (error) {
+          throw new AutomationError('Failed to save job details', 'SAVE_JOB_DETAILS_ERROR', error);
+        }
+      }
+    } catch (error) {
+      console.error('Save job details error:', error);
+      // Don't throw - job details are supplementary, shouldn't break the flow
+    }
+  }
+
+  /**
+   * Get applications for a specific session
+   */
+  async getSessionApplications(sessionId: string): Promise<AppliedJob[]> {
+    try {
+      const { data, error } = await this.supabase
+        .from('applied_jobs')
+        .select('*')
+        .eq('session_id', sessionId)
+        .order('applied_at', { ascending: false });
+
+      if (error) throw new AutomationError('Failed to fetch session applications', 'FETCH_SESSION_APPS_ERROR', error);
+
+      return data as AppliedJob[];
+    } catch (error) {
+      console.error('Get session applications error:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Get applied jobs with pagination
    */
   async getAppliedJobs(
@@ -393,6 +567,47 @@ export class SupabaseAutomationService {
     } catch (error) {
       console.error('Check if already applied error:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Check if a duplicate application exists (by title and company)
+   */
+  async checkDuplicateApplication(
+    sessionId: string,
+    jobTitle: string,
+    companyName: string
+  ): Promise<boolean> {
+    try {
+      // Get session to find user_id
+      const { data: session, error: sessionError } = await this.supabase
+        .from('automation_sessions')
+        .select('user_id')
+        .eq('id', sessionId)
+        .single();
+
+      if (sessionError || !session) {
+        return false;
+      }
+
+      // Check for duplicate by title and company
+      const { data, error } = await this.supabase
+        .from('applied_jobs')
+        .select('id')
+        .eq('user_id', session.user_id)
+        .eq('title', jobTitle)
+        .eq('company', companyName)
+        .limit(1);
+
+      if (error) {
+        console.error('Check duplicate application error:', error);
+        return false;
+      }
+
+      return data && data.length > 0;
+    } catch (error) {
+      console.error('Check duplicate application error:', error);
+      return false;
     }
   }
 

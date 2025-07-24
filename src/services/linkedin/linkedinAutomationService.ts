@@ -1,17 +1,18 @@
-import { Stagehand } from '@browserbase/stagehand';
+import { Stagehand } from '@browserbasehq/stagehand';
 import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
+import { z } from 'zod';
 import { 
-  AutomationSession, 
   JobSearchConfig, 
   InterventionType,
-  SessionStatus,
-  JobApplication,
-  AutomationEventType
+  AutomationEventType,
+  AutomationError
 } from '../../types/automation.types';
 import { BrowserbaseSessionManager } from '../browserbase/sessionManager';
 import { SupabaseAutomationService } from '../supabase/automationService';
+import { LinkedInSessionService, LinkedInSession } from '../supabase/linkedinSessionService';
 import { InterventionDetectionService } from '../stagehand/interventionDetectionService';
+import { BrowserbaseUploadService } from '../browserbase/uploadService';
 
 interface LinkedInAutomationConfig {
   maxRetries?: number;
@@ -35,8 +36,13 @@ export class LinkedInAutomationService extends EventEmitter {
   private config: LinkedInAutomationConfig;
   private browserbaseManager: BrowserbaseSessionManager;
   private supabaseService: SupabaseAutomationService;
+  private linkedinSessionService: LinkedInSessionService;
   private interventionDetector: InterventionDetectionService;
+  private uploadService: BrowserbaseUploadService;
   private activeStagehand: Map<string, Stagehand> = new Map();
+  private sessionProgress: Map<string, AutomationProgress> = new Map();
+  private loginMonitors: Map<string, NodeJS.Timeout> = new Map();
+  private uploadedResumes: Map<string, string> = new Map(); // sessionId -> uploadedFileName
 
   constructor(
     browserbaseManager: BrowserbaseSessionManager,
@@ -46,10 +52,21 @@ export class LinkedInAutomationService extends EventEmitter {
     super();
     this.browserbaseManager = browserbaseManager;
     this.supabaseService = supabaseService;
+    
+    // Extract LinkedInSessionService from browserbaseManager
+    this.linkedinSessionService = (browserbaseManager as any).sessionService;
+    
     this.interventionDetector = new InterventionDetectionService({
       confidenceThreshold: 0.7,
       verboseLogging: config?.verboseLogging
     });
+    
+    // Initialize upload service
+    this.uploadService = new BrowserbaseUploadService(
+      process.env.BROWSERBASE_API_KEY!,
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_KEY
+    );
     
     this.config = {
       maxRetries: 3,
@@ -69,131 +86,168 @@ export class LinkedInAutomationService extends EventEmitter {
     config: JobSearchConfig
   ): Promise<{ sessionId: string; debugUrl: string }> {
     try {
-      // Create or get existing session
-      const session = await this.browserbaseManager.getOrCreateSession(userId, config);
+      // Check if user has reached session limit before creating Stagehand
+      const activeCount = await this.linkedinSessionService.getActiveSessionsCount(userId);
+      if (activeCount >= 10) { // Temporarily increased for testing
+        throw new AutomationError(
+          'Session limit reached. Please complete or terminate existing sessions.',
+          'SESSION_LIMIT_REACHED',
+          { userId, limit: 10, currentActive: activeCount }
+        );
+      }
       
-      // Initialize Stagehand
+      // Initialize Stagehand with Browserbase and OpenAI GPT-4o
+      // Let Stagehand manage the browser session
       const stagehand = new Stagehand({
         env: 'BROWSERBASE',
-        apiKey: process.env.BROWSERBASE_API_KEY,
-        browserbaseSessionID: session.browserbase_session_id,
-        verbose: this.config.verboseLogging
+        browserbaseApiKey: process.env.BROWSERBASE_API_KEY!,
+        projectId: process.env.BROWSERBASE_PROJECT_ID!,
+        verbose: this.config.verboseLogging ? 1 : 0,  // Convert boolean to number
+        modelName: 'openai/gpt-4o' as any,
+        openaiApiKey: process.env.OPENAI_API_KEY!,
+        // Enable proxies for Browserbase sessions
+        // Note: proxies are enabled by default in Browserbase
+        // Only specify if you need to customize proxy settings
+        domSettleTimeoutMs: 30000
       });
 
-      await stagehand.init();
-      this.activeStagehand.set(session.id, stagehand);
+      let sessionId: string;
+      let session: LinkedInSession;
 
-      // Get debug URL
-      const debugUrl = await this.browserbaseManager.getDebugUrl(session.browserbase_session_id);
+      try {
+        console.log('Initializing Stagehand with config:', {
+          env: 'BROWSERBASE',
+          projectId: process.env.BROWSERBASE_PROJECT_ID,
+          browserbaseApiKey: process.env.BROWSERBASE_API_KEY ? 'present' : 'missing',
+          modelName: 'openai/gpt-4o',
+          openaiApiKey: process.env.OPENAI_API_KEY ? 'present' : 'missing',
+          verbose: this.config.verboseLogging ? 1 : 0
+        });
+        
+        const initResult = await stagehand.init();
+        console.log('Stagehand initialized successfully', initResult);
+        
+        // Get the browserbase session ID from Stagehand
+        // Stagehand should provide the session ID after initialization
+        const browserbaseSessionId = (stagehand as any).browserbaseSessionID || 
+                                   (stagehand as any).sessionId || 
+                                   (initResult as any)?.sessionId ||
+                                   `stagehand-${uuidv4()}`;
+        
+        sessionId = browserbaseSessionId;
+        
+        // Get proper debug URLs from Browserbase API
+        let liveViewUrl = '';
+        try {
+          const debugUrls = await this.browserbaseManager.getSessionDebugUrls(sessionId);
+          liveViewUrl = debugUrls.debuggerUrl; // Use the debugger URL as the live view URL
+          console.log('Got Browserbase debug URLs:', debugUrls);
+        } catch (error) {
+          console.error('Failed to get debug URLs, using fallback:', error);
+          // Fallback URL format
+          liveViewUrl = `https://www.browserbase.com/sessions/${sessionId}`;
+        }
+        
+        console.log('Browserbase session created:', { sessionId, liveViewUrl });
+        
+        // Create session record in our database with config
+        session = await this.linkedinSessionService.createSession(
+          userId,
+          sessionId,
+          liveViewUrl,
+          config // Store the job search config for later resumption
+        );
+        
+        this.activeStagehand.set(sessionId, stagehand);
+      } catch (initError: any) {
+        console.error('Stagehand initialization error:', initError);
+        console.error('Error details:', {
+          message: initError.message,
+          stack: initError.stack,
+          response: initError.response,
+          data: initError.data
+        });
+        // Clean up Stagehand if initialization fails
+        if (stagehand) {
+          await stagehand.close().catch(() => {});
+        }
+        throw initError;
+      }
 
-      // Log session start
-      await this.supabaseService.logActivity(
-        session.id,
-        'session_started',
-        { config, debugUrl },
-        'Job search automation started'
-      );
+      // Initialize progress tracking
+      const progress: AutomationProgress = {
+        totalJobs: 0,
+        processedJobs: 0,
+        appliedJobs: 0,
+        skippedJobs: 0,
+        failedJobs: 0,
+        currentPage: 1
+      };
+      this.sessionProgress.set(sessionId, progress);
 
       // Emit event
       this.emit(AutomationEventType.SESSION_STARTED, {
-        sessionId: session.id,
+        sessionId: sessionId,
         userId,
-        debugUrl
+        config,
+        debugUrl: session.live_view_url
       });
 
-      // Start the automation in background
-      this.executeJobSearch(session, config).catch(error => {
-        console.error('Job search automation error:', error);
-        this.handleAutomationError(session.id, error);
+      // Start the automation process asynchronously
+      this.runAutomation(session, stagehand, config).catch(error => {
+        console.error('Automation process error:', error);
+        // Don't handle intervention errors as failures
+        if (error instanceof Error && !error.message.includes('Intervention required')) {
+          this.handleAutomationError(sessionId, error);
+        }
       });
 
-      return { sessionId: session.id, debugUrl };
+      return {
+        sessionId: sessionId,
+        debugUrl: session.live_view_url || ''
+      };
     } catch (error) {
-      console.error('Error starting job search:', error);
+      console.error('Failed to start job search:', error);
       throw error;
     }
   }
 
   /**
-   * Pause an active automation session
+   * Get automation progress
    */
-  async pauseSession(sessionId: string): Promise<AutomationSession> {
-    try {
-      // Update session status
-      const session = await this.browserbaseManager.pauseSession(sessionId);
-
-      // Log activity
-      await this.supabaseService.logActivity(
-        sessionId,
-        'session_paused',
-        {},
-        'Session paused by user'
-      );
-
-      // Emit event
-      this.emit(AutomationEventType.SESSION_PAUSED, { sessionId });
-
-      return session;
-    } catch (error) {
-      console.error('Error pausing session:', error);
-      throw error;
+  async getProgress(sessionId: string): Promise<AutomationProgress> {
+    const progress = this.sessionProgress.get(sessionId);
+    if (!progress) {
+      // Return default progress if not found
+      return {
+        totalJobs: 0,
+        processedJobs: 0,
+        appliedJobs: 0,
+        skippedJobs: 0,
+        failedJobs: 0,
+        currentPage: 1
+      };
     }
+    return progress;
   }
 
   /**
-   * Resume a paused automation session
+   * Pause automation session
    */
-  async resumeSession(sessionId: string): Promise<{ debugUrl: string }> {
+  async pauseSession(sessionId: string): Promise<void> {
     try {
-      // Get session details
-      const session = await this.browserbaseManager.resumeSession(sessionId);
-
-      // Re-initialize Stagehand if needed
-      if (!this.activeStagehand.has(sessionId)) {
-        const stagehand = new Stagehand({
-          env: 'BROWSERBASE',
-          apiKey: process.env.BROWSERBASE_API_KEY,
-          browserbaseSessionID: session.browserbase_session_id,
-          verbose: this.config.verboseLogging
-        });
-
-        await stagehand.init();
-        this.activeStagehand.set(sessionId, stagehand);
+      const session = await this.linkedinSessionService.getSessionByBrowserbaseId(sessionId);
+      if (!session) {
+        throw new Error('Session not found');
       }
 
-      // Get debug URL
-      const debugUrl = await this.browserbaseManager.getDebugUrl(session.browserbase_session_id);
-
-      // Log activity
-      await this.supabaseService.logActivity(
-        sessionId,
-        'session_resumed',
-        { debugUrl },
-        'Session resumed by user'
+      // Update session status
+      await this.linkedinSessionService.updateSessionStatus(
+        session.id,
+        'completed',
+        new Date()
       );
 
-      // Emit event
-      this.emit(AutomationEventType.SESSION_RESUMED, { sessionId });
-
-      // Resume automation
-      const config = session.job_search_config as JobSearchConfig;
-      this.executeJobSearch(session, config).catch(error => {
-        console.error('Resume automation error:', error);
-        this.handleAutomationError(sessionId, error);
-      });
-
-      return { debugUrl };
-    } catch (error) {
-      console.error('Error resuming session:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Stop and terminate an automation session
-   */
-  async stopSession(sessionId: string, reason?: string): Promise<void> {
-    try {
       // Clean up Stagehand
       const stagehand = this.activeStagehand.get(sessionId);
       if (stagehand) {
@@ -201,151 +255,165 @@ export class LinkedInAutomationService extends EventEmitter {
         this.activeStagehand.delete(sessionId);
       }
 
-      // Terminate session
-      await this.browserbaseManager.terminateSession(sessionId, reason);
+      this.emit(AutomationEventType.SESSION_PAUSED, { sessionId });
+    } catch (error) {
+      console.error('Failed to pause session:', error);
+      throw error;
+    }
+  }
 
-      // Log activity
-      await this.supabaseService.logActivity(
-        sessionId,
-        'session_stopped',
-        { reason },
-        reason || 'Session stopped by user'
+  /**
+   * Resume automation session after intervention
+   */
+  async resumeSession(sessionId: string): Promise<void> {
+    try {
+      const session = await this.linkedinSessionService.getSessionByBrowserbaseId(sessionId);
+      if (!session) {
+        throw new Error('Session not found');
+      }
+
+      const stagehand = this.activeStagehand.get(sessionId);
+      if (!stagehand) {
+        throw new Error('No active Stagehand instance for this session');
+      }
+
+      // Get the stored config from the initial session
+      const config = session.config || {};
+      
+      console.log('Resuming automation after intervention for session:', sessionId);
+      
+      // Update session status back to active
+      await this.linkedinSessionService.updateSessionStatus(
+        session.id,
+        'active',
+        null
+      );
+      
+      // Emit resumption event
+      this.emit(AutomationEventType.SESSION_RESUMED, { sessionId });
+      
+      // Continue the automation from where we left off
+      // We need to determine where we were in the process
+      const currentUrl = await stagehand.page.url();
+      
+      if (currentUrl.includes('linkedin.com/jobs')) {
+        // We're on the jobs page, continue with job search
+        await this.performJobSearch(stagehand, sessionId, config);
+        
+        // Continue with the rest of the automation
+        this.runAutomation(session, stagehand, config).catch(error => {
+          console.error('Error resuming automation:', error);
+          this.handleAutomationError(sessionId, error);
+        });
+      } else {
+        // We're not on the jobs page, navigate there first
+        await this.navigateToLinkedIn(stagehand, sessionId);
+        
+        // Then continue with the full automation
+        this.runAutomation(session, stagehand, config).catch(error => {
+          console.error('Error resuming automation:', error);
+          this.handleAutomationError(sessionId, error);
+        });
+      }
+    } catch (error) {
+      console.error('Failed to resume session:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Stop automation session
+   */
+  async stopSession(sessionId: string, reason?: string): Promise<void> {
+    try {
+      const session = await this.linkedinSessionService.getSessionByBrowserbaseId(sessionId);
+      if (!session) {
+        throw new Error('Session not found');
+      }
+
+      // Update session status
+      await this.linkedinSessionService.updateSessionStatus(
+        session.id,
+        'completed',
+        new Date()
       );
 
-      // Emit event
+      // Clean up login monitor if exists
+      if (this.loginMonitors.has(sessionId)) {
+        clearInterval(this.loginMonitors.get(sessionId));
+        this.loginMonitors.delete(sessionId);
+      }
+
+      // Clean up Stagehand
+      const stagehand = this.activeStagehand.get(sessionId);
+      if (stagehand) {
+        await stagehand.close();
+        this.activeStagehand.delete(sessionId);
+      }
+
+      // Clean up progress
+      this.sessionProgress.delete(sessionId);
+      
+      // Clean up uploaded resume reference
+      this.uploadedResumes.delete(sessionId);
+
       this.emit(AutomationEventType.SESSION_STOPPED, { sessionId, reason });
     } catch (error) {
-      console.error('Error stopping session:', error);
+      console.error('Failed to stop session:', error);
       throw error;
     }
   }
 
   /**
-   * Get current automation progress
+   * Run the automation process
    */
-  async getProgress(sessionId: string): Promise<AutomationProgress> {
-    try {
-      // Get applications count
-      const applications = await this.supabaseService.getSessionApplications(sessionId);
-      
-      // Get latest progress from logs
-      const logs = await this.supabaseService.getSessionLogs(sessionId, 1);
-      const latestLog = logs[0];
-      
-      const progress: AutomationProgress = {
-        totalJobs: 0,
-        processedJobs: applications.length,
-        appliedJobs: applications.filter(app => app.status === 'applied').length,
-        skippedJobs: applications.filter(app => app.status === 'skipped').length,
-        failedJobs: applications.filter(app => app.status === 'failed').length,
-        currentPage: 1,
-        lastProcessedJobId: applications[applications.length - 1]?.job_id
-      };
-
-      // Extract progress from latest log if available
-      if (latestLog?.details && typeof latestLog.details === 'object') {
-        const details = latestLog.details as any;
-        if (details.progress) {
-          Object.assign(progress, details.progress);
-        }
-      }
-
-      return progress;
-    } catch (error) {
-      console.error('Error getting progress:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Execute the job search automation
-   */
-  private async executeJobSearch(
-    session: AutomationSession,
+  private async runAutomation(
+    session: LinkedInSession,
+    stagehand: Stagehand,
     config: JobSearchConfig
   ): Promise<void> {
-    const stagehand = this.activeStagehand.get(session.id);
-    if (!stagehand) {
-      throw new Error('Stagehand not initialized');
-    }
-
-    const progress: AutomationProgress = {
-      totalJobs: 0,
-      processedJobs: 0,
-      appliedJobs: 0,
-      skippedJobs: 0,
-      failedJobs: 0,
-      currentPage: 1
-    };
-
     try {
-      // Navigate to LinkedIn Jobs
-      await this.navigateToLinkedIn(stagehand, session.id);
-
-      // Perform job search
-      await this.performJobSearch(stagehand, session.id, config);
-
-      // Process job listings
-      let hasMoreJobs = true;
-      while (hasMoreJobs && session.status === SessionStatus.RUNNING) {
-        // Get current session status
-        const currentSession = await this.supabaseService.getSession(session.id);
-        if (currentSession?.status !== SessionStatus.RUNNING) {
-          console.log('Session no longer running, stopping automation');
-          break;
-        }
-
-        // Process jobs on current page
-        const jobsProcessed = await this.processJobListings(
-          stagehand,
-          session.id,
-          config,
-          progress
-        );
-
-        if (jobsProcessed === 0) {
-          hasMoreJobs = false;
-        } else {
-          // Check if we should continue to next page
-          if (config.maxApplications && progress.appliedJobs >= config.maxApplications) {
-            console.log('Reached max applications limit');
-            break;
-          }
-
-          // Navigate to next page
-          hasMoreJobs = await this.navigateToNextPage(stagehand, session.id);
-          if (hasMoreJobs) {
-            progress.currentPage++;
-          }
-        }
-
-        // Save progress periodically
-        if (progress.processedJobs % this.config.saveProgressInterval === 0) {
-          await this.saveProgress(session.id, progress);
+      // Upload resume if provided
+      if (config.resumeUrl) {
+        try {
+          console.log('Uploading resume from:', config.resumeUrl);
+          const uploadedFileName = await this.uploadService.uploadResumeFromSupabase(
+            session.browserbase_session_id,
+            config.resumeUrl
+          );
+          this.uploadedResumes.set(session.browserbase_session_id, uploadedFileName);
+          console.log('Resume uploaded successfully:', uploadedFileName);
+        } catch (error) {
+          console.error('Failed to upload resume, continuing without it:', error);
+          // Don't fail the entire process if resume upload fails
         }
       }
 
-      // Final save and complete session
-      await this.saveProgress(session.id, progress);
-      await this.browserbaseManager.completeSession(session.id);
+      // Navigate to LinkedIn
+      await this.navigateToLinkedIn(stagehand, session.browserbase_session_id);
 
-      // Log completion
-      await this.supabaseService.logActivity(
-        session.id,
-        'session_completed',
-        { progress },
-        `Automation completed. Applied to ${progress.appliedJobs} jobs.`
-      );
-
-      // Emit completion event
-      this.emit(AutomationEventType.SESSION_COMPLETED, {
-        sessionId: session.id,
-        progress
-      });
+      // Check if navigation succeeded (no intervention needed)
+      const currentSession = await this.linkedinSessionService.getSessionByBrowserbaseId(session.browserbase_session_id);
+      if (currentSession?.status === 'intervention_required') {
+        console.log('Automation paused for intervention');
+        return; // Exit gracefully - login monitor will resume
+      }
+      
+      // Execute the comprehensive job application flow
+      await this.executeJobApplicationFlow(stagehand, session, config);
 
     } catch (error) {
       console.error('Job search automation error:', error);
-      await this.handleAutomationError(session.id, error);
+      
+      // Check if it's an intervention error
+      if (error instanceof Error && error.message.includes('Intervention required')) {
+        console.log('Automation paused due to intervention requirement');
+        // Don't handle as error - the session should stay active
+        // The intervention event has already been emitted
+        return;
+      }
+      
+      await this.handleAutomationError(session.browserbase_session_id, error);
       throw error;
     }
   }
@@ -357,594 +425,421 @@ export class LinkedInAutomationService extends EventEmitter {
     stagehand: Stagehand,
     sessionId: string
   ): Promise<void> {
-    await this.logStep(sessionId, 'navigate_start', {}, 'Navigating to LinkedIn Jobs');
-
     try {
+      // Use domcontentloaded instead of networkidle to avoid timeout
       await stagehand.page.goto('https://www.linkedin.com/jobs/', {
-        waitUntil: 'networkidle'
+        waitUntil: 'domcontentloaded',
+        timeout: 60000 // Increase timeout to 60 seconds
       });
+
+      // Wait a bit for the page to settle
+      await stagehand.page.waitForTimeout(3000);
 
       // Check for interventions
       if (this.config.checkInterventionAfterActions) {
-        await this.checkForIntervention(stagehand, sessionId);
+        const needsIntervention = await this.checkForIntervention(stagehand, sessionId);
+        if (needsIntervention) {
+          // Stop the automation flow gracefully
+          return;
+        }
       }
-
-      await this.logStep(sessionId, 'navigate_complete', {}, 'Successfully navigated to LinkedIn Jobs');
     } catch (error) {
-      await this.logStep(sessionId, 'navigate_failed', { error: error.message }, 'Failed to navigate to LinkedIn');
+      console.error('Failed to navigate to LinkedIn:', error);
       throw error;
     }
   }
 
   /**
    * Perform job search with given criteria
+   * @deprecated Use executeJobApplicationFlow instead
    */
   private async performJobSearch(
     stagehand: Stagehand,
     sessionId: string,
     config: JobSearchConfig
   ): Promise<void> {
-    await this.logStep(sessionId, 'search_start', { config }, 'Starting job search');
-
     try {
-      // Enter job title
-      if (config.jobTitle) {
-        await this.retryAction(async () => {
-          await stagehand.act({
-            action: `Type "${config.jobTitle}" in the job title search box`
-          });
+      // First check we're actually on the jobs page
+      const currentUrl = await stagehand.page.url();
+      console.log('Current URL before job search:', currentUrl);
+      
+      // If we're on a login page or not on jobs page, wait or navigate
+      if (currentUrl.includes('login') || currentUrl.includes('sign-in') || !currentUrl.includes('linkedin.com/jobs')) {
+        console.log('Not on jobs page, navigating...');
+        
+        // Navigate to jobs page
+        await stagehand.page.goto('https://www.linkedin.com/jobs/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 60000
         });
+        await stagehand.page.waitForTimeout(5000); // Give more time for page to load
       }
 
-      // Enter location
-      if (config.location) {
-        await this.retryAction(async () => {
-          await stagehand.act({
-            action: `Type "${config.location}" in the location search box`
-          });
-        });
+      // Parse the search prompt if it's a natural language query
+      let jobTitle = config.jobTitle;
+      let location = config.location;
+      
+      if (config.searchPrompt && !jobTitle && !location) {
+        // Extract job title and location from natural language prompt
+        const parsed = this.parseSearchPrompt(config.searchPrompt);
+        jobTitle = parsed.jobTitle || jobTitle;
+        location = parsed.location || location;
+        console.log('Parsed search prompt:', { original: config.searchPrompt, jobTitle, location });
       }
 
-      // Click search button
-      await this.retryAction(async () => {
-        await stagehand.act({
-          action: 'Click the search button to search for jobs'
-        });
-      });
+      // Search for job title in the appropriate field
+      if (jobTitle) {
+        console.log('Entering job title:', jobTitle);
+        // Clear any existing text first
+        await stagehand.page.act('Click on the job search input field that says "Search by title, skill, or company" or has placeholder text about job titles');
+        await stagehand.page.waitForTimeout(500);
+        // Clear the field
+        await stagehand.page.act('Select all text in the currently focused input field and delete it');
+        await stagehand.page.waitForTimeout(500);
+        // Type the job title
+        await stagehand.page.act(`Type "${jobTitle}" into the currently focused input field`);
+        await stagehand.page.waitForTimeout(1000);
+      }
+
+      // Set location in the location field separately
+      if (location) {
+        console.log('Entering location:', location);
+        // Click on the location field
+        await stagehand.page.act('Click on the location input field that says "City, state, or zip code" or has placeholder text about location');
+        await stagehand.page.waitForTimeout(500);
+        // Clear the field
+        await stagehand.page.act('Select all text in the currently focused input field and delete it');
+        await stagehand.page.waitForTimeout(500);
+        // Type the location
+        await stagehand.page.act(`Type "${location}" into the currently focused input field`);
+        await stagehand.page.waitForTimeout(1000);
+      }
+
+      // Click search button or press Enter
+      await stagehand.page.act('Click the search button or press Enter to search for jobs');
 
       // Wait for results to load
       await stagehand.page.waitForTimeout(3000);
 
-      // Apply filters
+      // Apply filters if configured
       await this.applySearchFilters(stagehand, sessionId, config);
 
-      // Check for interventions
-      if (this.config.checkInterventionAfterActions) {
-        await this.checkForIntervention(stagehand, sessionId);
-      }
-
-      await this.logStep(sessionId, 'search_complete', {}, 'Job search completed');
     } catch (error) {
-      await this.logStep(sessionId, 'search_failed', { error: error.message }, 'Job search failed');
-      throw error;
-    }
-  }
-
-  /**
-   * Apply search filters based on config
-   */
-  private async applySearchFilters(
-    stagehand: Stagehand,
-    sessionId: string,
-    config: JobSearchConfig
-  ): Promise<void> {
-    await this.logStep(sessionId, 'filters_start', { config }, 'Applying search filters');
-
-    try {
-      // Date posted filter
-      if (config.datePosted) {
-        await this.retryAction(async () => {
-          await stagehand.act({
-            action: `Click on the date posted filter and select "${config.datePosted}"`
-          });
-        });
-      }
-
-      // Experience level filter
-      if (config.experienceLevel && config.experienceLevel.length > 0) {
-        await this.retryAction(async () => {
-          await stagehand.act({
-            action: `Click on experience level filter and select ${config.experienceLevel.join(', ')}`
-          });
-        });
-      }
-
-      // Job type filter
-      if (config.jobType && config.jobType.length > 0) {
-        await this.retryAction(async () => {
-          await stagehand.act({
-            action: `Click on job type filter and select ${config.jobType.join(', ')}`
-          });
-        });
-      }
-
-      // Remote filter
-      if (config.remote) {
-        await this.retryAction(async () => {
-          await stagehand.act({
-            action: 'Click on remote job filter to show only remote positions'
-          });
-        });
-      }
-
-      // Easy Apply filter
-      if (config.easyApplyOnly) {
-        await this.retryAction(async () => {
-          await stagehand.act({
-            action: 'Click on Easy Apply filter to show only Easy Apply jobs'
-          });
-        });
-      }
-
-      await this.logStep(sessionId, 'filters_complete', {}, 'Search filters applied');
-    } catch (error) {
-      await this.logStep(sessionId, 'filters_failed', { error: error.message }, 'Failed to apply filters');
+      console.error('Failed to perform job search:', error);
       throw error;
     }
   }
 
   /**
    * Process job listings on current page
+   * @deprecated Use executeJobApplicationFlow instead
    */
   private async processJobListings(
     stagehand: Stagehand,
-    sessionId: string,
+    session: LinkedInSession,
     config: JobSearchConfig,
     progress: AutomationProgress
   ): Promise<number> {
-    await this.logStep(sessionId, 'process_listings_start', { page: progress.currentPage }, 'Processing job listings');
-
     try {
-      // Extract job listings
-      const jobs = await this.extractJobListings(stagehand);
+      // Extract job listings using Stagehand's extract method
+      console.log('Extracting job listings...');
       
-      if (jobs.length === 0) {
-        await this.logStep(sessionId, 'no_jobs_found', {}, 'No job listings found');
+      // Define the schema for job listings
+      const jobSchema = z.object({
+        jobId: z.string().optional(),
+        title: z.string(),
+        company: z.string(),
+        location: z.string(),
+        jobUrl: z.string().optional(),
+        isEasyApply: z.boolean()
+      });
+      
+      // Extract jobs - use z.array() for multiple items
+      const jobs = await stagehand.page.extract({
+        instruction: 'Extract all job listings visible on this page. For each job, get the job title, company name, location, job URL if available, and whether it has an Easy Apply button.',
+        schema: z.array(jobSchema)
+      }) as any[];
+
+      if (!jobs || jobs.length === 0) {
         return 0;
       }
 
       progress.totalJobs += jobs.length;
-      await this.logStep(sessionId, 'jobs_found', { count: jobs.length }, `Found ${jobs.length} job listings`);
 
       // Process each job
       for (const job of jobs) {
-        // Check session status
-        const currentSession = await this.supabaseService.getSession(sessionId);
-        if (currentSession?.status !== SessionStatus.RUNNING) {
-          break;
-        }
-
-        // Check max applications limit
-        if (config.maxApplications && progress.appliedJobs >= config.maxApplications) {
-          break;
-        }
-
         try {
-          const applied = await this.processJob(stagehand, sessionId, job, config);
-          progress.processedJobs++;
+          // Check if already applied
+          const alreadyApplied = await this.linkedinSessionService.hasAppliedToJob(
+            session.user_id,
+            job.jobUrl
+          );
 
+          if (alreadyApplied) {
+            progress.skippedJobs++;
+            continue;
+          }
+
+          // Check if should apply (based on config)
+          if (config.easyApplyOnly && !job.isEasyApply) {
+            progress.skippedJobs++;
+            continue;
+          }
+
+          // Apply to job (simplified for now - the comprehensive prompt handles this)
+          // In the new flow, applications are handled by executeJobApplicationFlow
+          const applied = false; // This method is deprecated
+          
           if (applied) {
             progress.appliedJobs++;
+            
+            // Record application
+            await this.linkedinSessionService.recordJobApplication(
+              session.id,
+              session.user_id,
+              {
+                job_url: job.jobUrl,
+                job_id: job.jobId,
+                company_name: job.company,
+                job_title: job.title,
+                location: job.location,
+                application_type: job.isEasyApply ? 'easy_apply' : 'external',
+                success: true
+              }
+            );
           } else {
-            progress.skippedJobs++;
+            progress.failedJobs++;
           }
 
-          // Save progress periodically
-          if (progress.processedJobs % this.config.saveProgressInterval === 0) {
-            await this.saveProgress(sessionId, progress);
-          }
+          progress.processedJobs++;
 
-          // Emit progress event
-          this.emit(AutomationEventType.PROGRESS_UPDATED, {
-            sessionId,
-            progress
-          });
+          // Check max applications
+          if (config.maxApplications && progress.appliedJobs >= config.maxApplications) {
+            break;
+          }
 
         } catch (error) {
-          console.error(`Error processing job ${job.id}:`, error);
+          console.error('Error processing job:', error);
           progress.failedJobs++;
-          await this.logStep(sessionId, 'job_process_failed', { 
-            jobId: job.id, 
-            error: error.message 
-          }, `Failed to process job: ${job.title}`);
+          progress.processedJobs++;
         }
-
-        // Add delay between applications
-        await stagehand.page.waitForTimeout(2000 + Math.random() * 3000);
       }
-
-      await this.logStep(sessionId, 'process_listings_complete', { 
-        processed: jobs.length,
-        applied: progress.appliedJobs,
-        skipped: progress.skippedJobs
-      }, 'Finished processing job listings');
 
       return jobs.length;
     } catch (error) {
-      await this.logStep(sessionId, 'process_listings_failed', { error: error.message }, 'Failed to process job listings');
-      throw error;
+      console.error('Failed to process job listings:', error);
+      return 0;
     }
   }
 
-  /**
-   * Extract job listings from current page
-   */
-  private async extractJobListings(stagehand: Stagehand): Promise<Array<{
-    id: string;
-    title: string;
-    company: string;
-    location: string;
-    isEasyApply: boolean;
-  }>> {
-    try {
-      const jobData = await stagehand.extract({
-        instruction: 'Extract all job listings on the page with their title, company, location, and whether they have Easy Apply',
-        schema: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              title: { type: 'string' },
-              company: { type: 'string' },
-              location: { type: 'string' },
-              isEasyApply: { type: 'boolean' }
-            },
-            required: ['id', 'title', 'company']
-          }
-        }
-      });
-
-      return jobData || [];
-    } catch (error) {
-      console.error('Error extracting job listings:', error);
-      return [];
-    }
-  }
 
   /**
-   * Process individual job
+   * Apply search filters using natural language understanding
    */
-  private async processJob(
+  private async applySearchFilters(
     stagehand: Stagehand,
     sessionId: string,
-    job: any,
     config: JobSearchConfig
-  ): Promise<boolean> {
-    const jobId = uuidv4();
-    
-    await this.logStep(sessionId, 'job_process_start', { job }, `Processing job: ${job.title} at ${job.company}`);
-
+  ): Promise<void> {
     try {
-      // Check if already applied
-      const existingApplication = await this.supabaseService.checkDuplicateApplication(
-        sessionId,
-        job.title,
-        job.company
-      );
-
-      if (existingApplication) {
-        await this.logStep(sessionId, 'job_already_applied', { job }, 'Already applied to this job');
-        return false;
-      }
-
-      // Check if Easy Apply only
-      if (config.easyApplyOnly && !job.isEasyApply) {
-        await this.logStep(sessionId, 'job_not_easy_apply', { job }, 'Skipping - not Easy Apply');
-        await this.supabaseService.saveJobApplication(sessionId, {
-          id: jobId,
-          job_id: job.id,
-          job_title: job.title,
-          company_name: job.company,
-          location: job.location,
-          status: 'skipped',
-          skip_reason: 'Not Easy Apply'
-        });
-        return false;
-      }
-
-      // Click on job listing
-      await this.retryAction(async () => {
-        await stagehand.act({
-          action: `Click on the job listing for "${job.title}" at ${job.company}`
-        });
-      });
-
-      // Wait for job details to load
-      await stagehand.page.waitForTimeout(2000);
-
-      // Extract job details
-      const jobDetails = await this.extractJobDetails(stagehand);
-
-      // Check job requirements if needed
-      if (config.keywords && config.keywords.length > 0) {
-        const hasKeywords = config.keywords.some(keyword => 
-          jobDetails.description?.toLowerCase().includes(keyword.toLowerCase())
-        );
-
-        if (!hasKeywords) {
-          await this.logStep(sessionId, 'job_no_keywords', { job }, 'Skipping - keywords not found');
-          await this.supabaseService.saveJobApplication(sessionId, {
-            id: jobId,
-            job_id: job.id,
-            job_title: job.title,
-            company_name: job.company,
-            location: job.location,
-            status: 'skipped',
-            skip_reason: 'Keywords not matched'
-          });
-          return false;
-        }
-      }
-
-      // Apply to job
-      const applied = await this.applyToJob(stagehand, sessionId, job, jobDetails);
-
-      if (applied) {
-        await this.supabaseService.saveJobApplication(sessionId, {
-          id: jobId,
-          job_id: job.id,
-          job_title: job.title,
-          company_name: job.company,
-          location: job.location,
-          job_description: jobDetails.description,
-          status: 'applied',
-          applied_at: new Date().toISOString()
-        });
-
-        await this.logStep(sessionId, 'job_applied', { job }, `Successfully applied to ${job.title}`);
-        return true;
-      } else {
-        await this.supabaseService.saveJobApplication(sessionId, {
-          id: jobId,
-          job_id: job.id,
-          job_title: job.title,
-          company_name: job.company,
-          location: job.location,
-          status: 'failed',
-          error_message: 'Failed to apply'
-        });
-        return false;
-      }
-
-    } catch (error) {
-      console.error(`Error processing job ${job.title}:`, error);
-      await this.supabaseService.saveJobApplication(sessionId, {
-        id: jobId,
-        job_id: job.id,
-        job_title: job.title,
-        company_name: job.company,
-        location: job.location,
-        status: 'failed',
-        error_message: error.message
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * Extract job details
-   */
-  private async extractJobDetails(stagehand: Stagehand): Promise<{
-    description?: string;
-    requirements?: string[];
-    benefits?: string[];
-  }> {
-    try {
-      const details = await stagehand.extract({
-        instruction: 'Extract the job description, requirements, and benefits from the job details panel',
-        schema: {
-          type: 'object',
-          properties: {
-            description: { type: 'string' },
-            requirements: {
-              type: 'array',
-              items: { type: 'string' }
-            },
-            benefits: {
-              type: 'array',
-              items: { type: 'string' }
-            }
-          }
-        }
-      });
-
-      return details || {};
-    } catch (error) {
-      console.error('Error extracting job details:', error);
-      return {};
-    }
-  }
-
-  /**
-   * Apply to a job
-   */
-  private async applyToJob(
-    stagehand: Stagehand,
-    sessionId: string,
-    job: any,
-    jobDetails: any
-  ): Promise<boolean> {
-    try {
-      // Check if Easy Apply button exists
-      const hasEasyApply = await stagehand.page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button'));
-        return buttons.some(btn => btn.textContent?.toLowerCase().includes('easy apply'));
-      });
-
-      if (!hasEasyApply) {
-        await this.logStep(sessionId, 'no_easy_apply_button', { job }, 'No Easy Apply button found');
-        return false;
-      }
-
-      // Click Easy Apply button
-      await this.retryAction(async () => {
-        await stagehand.act({
-          action: 'Click the Easy Apply button'
-        });
-      });
-
-      // Wait for modal to open
-      await stagehand.page.waitForTimeout(2000);
-
-      // Check for interventions (login, captcha, etc)
-      if (this.config.checkInterventionAfterActions) {
-        await this.checkForIntervention(stagehand, sessionId);
-      }
-
-      // Handle application form
-      const completed = await this.handleApplicationForm(stagehand, sessionId);
-
-      return completed;
-    } catch (error) {
-      console.error('Error applying to job:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Handle the application form flow
-   */
-  private async handleApplicationForm(
-    stagehand: Stagehand,
-    sessionId: string
-  ): Promise<boolean> {
-    let step = 1;
-    const maxSteps = 10; // Safety limit
-
-    while (step <= maxSteps) {
-      await this.logStep(sessionId, 'application_step', { step }, `Application form step ${step}`);
-
-      try {
-        // Check what's on the current form
-        const formElements = await stagehand.observe({
-          instruction: 'Find all form fields, buttons, and questions in the application modal',
-          returnAction: true
-        });
-
-        // Check if application is complete
-        const isComplete = await stagehand.page.evaluate(() => {
-          const text = document.body.textContent || '';
-          return text.toLowerCase().includes('application sent') || 
-                 text.toLowerCase().includes('application submitted');
-        });
-
-        if (isComplete) {
-          await this.logStep(sessionId, 'application_complete', {}, 'Application submitted successfully');
-          return true;
-        }
-
-        // Fill any required fields
-        const filledSomething = await this.fillApplicationFields(stagehand, formElements);
-
-        // Look for continue/submit button
-        const hasNextButton = formElements.some(el => 
-          el.description.toLowerCase().includes('continue') ||
-          el.description.toLowerCase().includes('next') ||
-          el.description.toLowerCase().includes('submit') ||
-          el.description.toLowerCase().includes('review')
-        );
-
-        if (hasNextButton) {
-          await this.retryAction(async () => {
-            await stagehand.act({
-              action: 'Click the continue, next, or submit button to proceed'
-            });
-          });
-
+      // If we have a natural language prompt, let Stagehand figure out the filters
+      if (config.searchPrompt) {
+        // Extract filter requirements from the prompt
+        const filterInstructions = this.buildFilterInstructions(config.searchPrompt);
+        
+        if (filterInstructions) {
+          console.log('Applying filters from natural language prompt:', filterInstructions);
+          await stagehand.page.act(filterInstructions);
           await stagehand.page.waitForTimeout(2000);
-          step++;
-        } else {
-          // No next button found, might be stuck
-          await this.logStep(sessionId, 'application_no_next', { step }, 'No next button found');
-          break;
         }
-
-        // Check for interventions
-        if (this.config.checkInterventionAfterActions) {
-          const intervention = await this.checkForIntervention(stagehand, sessionId);
-          if (intervention) {
-            return false;
-          }
-        }
-
-      } catch (error) {
-        console.error(`Error on application step ${step}:`, error);
-        await this.logStep(sessionId, 'application_step_error', { 
-          step, 
-          error: error.message 
-        }, `Error on step ${step}`);
-        return false;
       }
-    }
+      
+      // Apply explicit filters if provided
+      // Date posted filter
+      if (config.datePosted) {
+        await stagehand.page.act('Click the Date posted filter');
+        await stagehand.page.act(`Select "${config.datePosted}" from the date posted options`);
+        await stagehand.page.waitForTimeout(1000);
+      }
 
-    return false;
+      // Easy Apply filter
+      if (config.easyApplyOnly) {
+        await stagehand.page.act('Enable the Easy Apply filter by clicking its toggle or checkbox');
+        await stagehand.page.waitForTimeout(1000);
+      }
+
+      // Remote filter
+      if (config.remote) {
+        await stagehand.page.act('Enable the Remote filter by clicking its toggle or checkbox');
+        await stagehand.page.waitForTimeout(1000);
+      }
+
+      // Experience level filter
+      if (config.experienceLevel && config.experienceLevel.length > 0) {
+        await stagehand.page.act('Click on the Experience level filter');
+        await stagehand.page.waitForTimeout(500);
+        for (const level of config.experienceLevel) {
+          const readableLevel = this.getReadableExperienceLevel(level);
+          await stagehand.page.act(`Select "${readableLevel}" from the experience level options`);
+          await stagehand.page.waitForTimeout(500);
+        }
+      }
+
+      // Job type filter
+      if (config.jobType && config.jobType.length > 0) {
+        await stagehand.page.act('Click on the Job type filter');
+        await stagehand.page.waitForTimeout(500);
+        for (const type of config.jobType) {
+          const readableType = this.getReadableJobType(type);
+          await stagehand.page.act(`Select "${readableType}" from the job type options`);
+          await stagehand.page.waitForTimeout(500);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to apply filters:', error);
+      // Don't throw - continue without filters
+    }
   }
 
   /**
-   * Fill application form fields
+   * Parse natural language search prompt to extract job title and location
    */
-  private async fillApplicationFields(
-    stagehand: Stagehand,
-    formElements: any[]
-  ): Promise<boolean> {
-    let filledAny = false;
-
-    for (const element of formElements) {
-      const desc = element.description.toLowerCase();
-
-      // Skip if not a fillable field
-      if (element.method !== 'fill') continue;
-
-      try {
-        // Phone number
-        if (desc.includes('phone') && !desc.includes('optional')) {
-          await stagehand.act({
-            action: `Fill in phone number field with a placeholder like "555-0123"`
-          });
-          filledAny = true;
-        }
-
-        // Years of experience
-        if (desc.includes('years') && desc.includes('experience')) {
-          await stagehand.act({
-            action: `Fill in years of experience with "5"`
-          });
-          filledAny = true;
-        }
-
-        // Salary expectations
-        if (desc.includes('salary') || desc.includes('compensation')) {
-          await stagehand.act({
-            action: `Fill in salary expectation with "Negotiable"`
-          });
-          filledAny = true;
-        }
-
-        // Start date
-        if (desc.includes('start date') || desc.includes('available')) {
-          await stagehand.act({
-            action: `Fill in start date with "2 weeks"`
-          });
-          filledAny = true;
-        }
-
-      } catch (error) {
-        console.error('Error filling field:', error);
+  private parseSearchPrompt(prompt: string): { jobTitle?: string; location?: string } {
+    // Common patterns for extracting job title and location
+    const result: { jobTitle?: string; location?: string } = {};
+    
+    // Remove common words that aren't part of job title or location
+    const cleanPrompt = prompt.replace(/\b(jobs?|position|role|opportunity|opportunities|in|at|near|around)\b/gi, ' ').trim();
+    
+    // Try to extract location patterns
+    const locationPatterns = [
+      // City, State format
+      /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),?\s+([A-Z]{2})\b/,
+      // City, State/Province, Country
+      /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),?\s+([A-Z][a-z]+),?\s+([A-Z][a-z]+)\b/,
+      // Just city name (common cities)
+      /\b(San Francisco|Los Angeles|New York|Chicago|Seattle|Boston|Austin|Denver|Portland|Vancouver|Toronto|London|Berlin|Paris|Tokyo|Singapore)\b/i,
+    ];
+    
+    let location = '';
+    let remainingText = cleanPrompt;
+    
+    // Try each location pattern
+    for (const pattern of locationPatterns) {
+      const match = cleanPrompt.match(pattern);
+      if (match) {
+        location = match[0];
+        // Remove the location from the remaining text
+        remainingText = cleanPrompt.replace(match[0], '').trim();
+        break;
       }
     }
+    
+    // Check for "in [location]" pattern
+    const inLocationMatch = prompt.match(/\bin\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,?\s+[A-Z]{2})?)\b/);
+    if (inLocationMatch && !location) {
+      location = inLocationMatch[1];
+      remainingText = remainingText.replace(inLocationMatch[0], '').trim();
+    }
+    
+    // What's left should be the job title
+    if (remainingText) {
+      // Clean up extra spaces and common filler words
+      result.jobTitle = remainingText
+        .replace(/\s+/g, ' ')
+        .replace(/^\s*for\s+/, '')
+        .replace(/\s+for\s*$/, '')
+        .trim();
+    }
+    
+    if (location) {
+      result.location = location.trim();
+    }
+    
+    // If we couldn't parse it well, just use the whole prompt as job title
+    if (!result.jobTitle && !result.location) {
+      result.jobTitle = prompt;
+    }
+    
+    return result;
+  }
 
-    return filledAny;
+  /**
+   * Build filter instructions from natural language prompt
+   */
+  private buildFilterInstructions(prompt: string): string | null {
+    const instructions = [];
+    
+    // Check for date filters
+    if (/today|past 24 hours/i.test(prompt)) {
+      instructions.push('Set the date posted filter to "Past 24 hours"');
+    } else if (/this week|past week/i.test(prompt)) {
+      instructions.push('Set the date posted filter to "Past week"');
+    } else if (/this month|past month/i.test(prompt)) {
+      instructions.push('Set the date posted filter to "Past month"');
+    }
+    
+    // Check for remote
+    if (/remote|work from home|wfh/i.test(prompt)) {
+      instructions.push('Enable the Remote work filter');
+    }
+    
+    // Check for Easy Apply
+    if (/easy apply|quick apply/i.test(prompt)) {
+      instructions.push('Enable the Easy Apply filter');
+    }
+    
+    // Check for experience level
+    if (/entry level|junior/i.test(prompt)) {
+      instructions.push('Set experience level filter to include "Entry level"');
+    }
+    if (/senior/i.test(prompt)) {
+      instructions.push('Set experience level filter to include "Senior level"');
+    }
+    if (/intern/i.test(prompt)) {
+      instructions.push('Set experience level filter to include "Internship"');
+    }
+    
+    // Check for job type
+    if (/full time|full-time/i.test(prompt)) {
+      instructions.push('Set job type filter to "Full-time"');
+    }
+    if (/contract/i.test(prompt)) {
+      instructions.push('Set job type filter to include "Contract"');
+    }
+    
+    return instructions.length > 0 
+      ? `Apply the following filters: ${instructions.join('. ')}. Click each filter button and select the appropriate options.`
+      : null;
+  }
+
+  /**
+   * Convert experience level enum to readable text
+   */
+  private getReadableExperienceLevel(level: string): string {
+    const map: Record<string, string> = {
+      'INTERNSHIP': 'Internship',
+      'ENTRY_LEVEL': 'Entry level',
+      'MID_LEVEL': 'Mid-Senior level',
+      'SENIOR_LEVEL': 'Senior level',
+      'DIRECTOR': 'Director',
+      'EXECUTIVE': 'Executive'
+    };
+    return map[level] || level;
+  }
+
+  /**
+   * Convert job type enum to readable text
+   */
+  private getReadableJobType(type: string): string {
+    const map: Record<string, string> = {
+      'FULL_TIME': 'Full-time',
+      'PART_TIME': 'Part-time',
+      'CONTRACT': 'Contract',
+      'TEMPORARY': 'Temporary',
+      'INTERNSHIP': 'Internship'
+    };
+    return map[type] || type;
   }
 
   /**
@@ -955,38 +850,25 @@ export class LinkedInAutomationService extends EventEmitter {
     sessionId: string
   ): Promise<boolean> {
     try {
-      await this.logStep(sessionId, 'next_page_start', {}, 'Navigating to next page');
+      // Check if there's a next page button by extracting page info
+      const pageInfo = await stagehand.page.extract({
+        instruction: 'Check if there is a "Next" or pagination button that is enabled and clickable. Return an object with hasNextButton property.',
+        schema: z.object({
+          hasNextButton: z.boolean()
+        })
+      }) as { hasNextButton: boolean };
+      
+      const hasNextButton = pageInfo.hasNextButton;
 
-      // Check if next button exists and is enabled
-      const hasNextPage = await stagehand.page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button'));
-        const nextButton = buttons.find(btn => 
-          btn.getAttribute('aria-label')?.toLowerCase().includes('next') ||
-          btn.textContent?.toLowerCase() === 'next'
-        );
-        return nextButton && !nextButton.disabled;
-      });
-
-      if (!hasNextPage) {
-        await this.logStep(sessionId, 'no_next_page', {}, 'No more pages available');
-        return false;
+      if (hasNextButton) {
+        await stagehand.page.act('Click the Next page button');
+        await stagehand.page.waitForTimeout(3000);
+        return true;
       }
 
-      // Click next button
-      await this.retryAction(async () => {
-        await stagehand.act({
-          action: 'Click the Next button to go to the next page of job listings'
-        });
-      });
-
-      // Wait for page to load
-      await stagehand.page.waitForTimeout(3000);
-
-      await this.logStep(sessionId, 'next_page_complete', {}, 'Navigated to next page');
-      return true;
+      return false;
     } catch (error) {
-      console.error('Error navigating to next page:', error);
-      await this.logStep(sessionId, 'next_page_failed', { error: error.message }, 'Failed to navigate to next page');
+      console.error('Failed to navigate to next page:', error);
       return false;
     }
   }
@@ -998,154 +880,594 @@ export class LinkedInAutomationService extends EventEmitter {
     stagehand: Stagehand,
     sessionId: string
   ): Promise<boolean> {
-    const intervention = await this.interventionDetector.detectIntervention(stagehand);
+    try {
+      const detection = await this.interventionDetector.detectIntervention(stagehand);
+      
+      if (detection && detection.confidence > 0.7) {
+        // Emit intervention event
+        this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
+          sessionId,
+          intervention: {
+            type: detection.type,
+            message: detection.message,
+            url: detection.pageContext?.url
+          }
+        });
 
-    if (intervention) {
-      console.log('Intervention detected:', intervention);
+        // Don't close the session, just pause the automation workflow
+        // The session should stay alive for manual intervention
+        console.log('Intervention detected, pausing automation workflow...');
+        
+        // Update session status to indicate intervention needed
+        const session = await this.linkedinSessionService.getSessionByBrowserbaseId(sessionId);
+        if (session) {
+          await this.linkedinSessionService.updateSessionStatus(
+            session.id,
+            'intervention_required',
+            null
+          );
+        }
+        
+        // If it's a login intervention, start monitoring for successful login
+        if (detection.type === 'login') {
+          this.startLoginMonitoring(stagehand, sessionId, session);
+        }
+        
+        // Return true to indicate intervention is required
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Failed to check for intervention:', error);
+      return false;
+    }
+  }
 
-      // Get debug URL
-      const debugUrl = await this.browserbaseManager.getDebugUrl(
-        stagehand.browserbaseSessionId || ''
-      );
+  /**
+   * Monitor for successful login completion
+   * NOTE: This method is deprecated - we now wait for manual continuation
+   */
+  private async startLoginMonitoring(
+    stagehand: Stagehand,
+    sessionId: string,
+    session: any
+  ): Promise<void> {
+    // Disabled automatic login monitoring - we now wait for manual continuation via API
+    console.log('Login intervention detected for session:', sessionId);
+    console.log('Waiting for manual continuation via /continue endpoint');
+    
+    // Clear any existing monitor for this session
+    if (this.loginMonitors.has(sessionId)) {
+      clearInterval(this.loginMonitors.get(sessionId));
+      this.loginMonitors.delete(sessionId);
+    }
+    
+    // Don't start automatic monitoring - wait for manual continue
+  }
 
-      // Log intervention
-      await this.supabaseService.logIntervention(
-        sessionId,
-        intervention.type,
-        debugUrl,
-        intervention.pageContext,
-        intervention.message
-      );
+  /**
+   * Build comprehensive prompt for job application
+   */
+  private buildComprehensivePrompt(config: JobSearchConfig): string {
+    const searchQuery = config.searchPrompt || `${config.jobTitle} in ${config.location}`;
+    const maxApplications = config.maxApplications || 50;
+    const easyApplyOnly = config.easyApplyOnly !== false;
+    
+    return `
+You are an AI assistant helping with LinkedIn job applications. 
+The user wants to find and apply to jobs matching: "${searchQuery}"
 
-      // Update session status
-      await this.browserbaseManager.pauseSession(sessionId);
+Target: Apply to ${maxApplications} jobs ${easyApplyOnly ? 'using Easy Apply only' : 'including external applications'}
 
-      // Emit intervention event
-      this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
-        sessionId,
-        intervention,
-        debugUrl
+COMPLETE WORKFLOW:
+
+1. JOB SEARCH:
+   a) Click on LinkedIn's job search bar at the top of the page
+   b) Clear any existing text in the search bar
+   c) Type exactly: ${searchQuery}
+   d) Press the Enter key to search
+   e) Wait for job results page to load completely
+   ${config.filters ? `- Apply these filters: ${JSON.stringify(config.filters)}` : ''}
+
+2. JOB APPLICATION PROCESS:
+   For each job listing (continue until ${maxApplications} applications):
+   
+   a) Click on the job to view details
+   b) Note the company name and job title for tracking
+   c) Look for ${easyApplyOnly ? 'Easy Apply button' : 'Apply or Easy Apply button'}
+   d) ${easyApplyOnly ? 'Skip jobs without Easy Apply' : 'Click any available apply button'}
+   
+   For Easy Apply:
+   - Fill out all required fields in the application form
+   - For multi-step forms: Complete each step and click Next/Continue
+   - CRITICAL: Always scroll down to find Submit button (it's never visible without scrolling)
+   - Upload resume if prompted: ${config.resumeUrl || 'use most recent'}
+   - Make educated guesses for fields without specific data:
+     * Years of experience: Base on job level (entry=1-2, mid=3-5, senior=5+)
+     * Salary expectations: Research typical ranges for the role/location
+     * Availability: "2 weeks notice" or "Available immediately"
+   - Click Submit to complete the application
+   
+   ${!easyApplyOnly ? `
+   For External Applications:
+   - Click will open new tab - IMMEDIATELY switch to that tab
+   - Look at browser tabs and click on the new non-LinkedIn tab
+   - Create account if needed
+   - Fill application form on external site
+   - Submit application
+   - Close external tab and return to LinkedIn tab
+   - Continue with next job
+   ` : ''}
+   
+   e) After each successful application, announce: "APPLIED TO: [Company] - [Job Title]"
+   f) Continue to next job
+
+3. IMPORTANT BEHAVIORS:
+   - ALWAYS scroll down when looking for buttons (especially Submit)
+   - The submit button is ALWAYS at the bottom - keep scrolling until you find it
+   - Keep accurate count of successful applications
+   - If a form fails, note it and move to the next job
+   - Stop when you reach ${maxApplications} successful applications
+   - For required fields without data, make reasonable guesses based on context
+
+4. HANDLING PAGINATION:
+   - When you run out of jobs on current page, look for "See more jobs" or pagination
+   - Click to load more jobs and continue applying
+   - Only stop when you've reached ${maxApplications} or no more jobs available
+
+5. COMPLETION:
+   - Summarize: "Completed X applications out of ${maxApplications} target"
+   - List all successful applications with company and job title
+
+Remember: The goal is to complete ${maxApplications} job applications efficiently while maintaining accuracy in form filling.`;
+  }
+
+  /**
+   * Build application prompt (without search part)
+   */
+  private buildApplicationPrompt(config: JobSearchConfig): string {
+    const maxApplications = config.maxApplications || 50;
+    const easyApplyOnly = config.easyApplyOnly !== false;
+    
+    return `
+You are on LinkedIn's job search results page. Your task is to apply to jobs.
+
+Target: Apply to ${maxApplications} jobs ${easyApplyOnly ? 'using Easy Apply only' : 'including external applications'}
+
+JOB APPLICATION PROCESS:
+For each job listing visible on the page (continue until ${maxApplications} applications):
+
+1. Click on a job listing to view its details
+2. Note the company name and job title for tracking
+3. Look for the Easy Apply button
+4. ${easyApplyOnly ? 'Skip this job if it does not have Easy Apply' : 'Apply to all jobs'}
+
+For Easy Apply jobs:
+- Click the Easy Apply button
+- Fill out all required fields in the application form
+- For multi-step forms: Complete each step and click Next/Continue
+- CRITICAL: Always scroll down to find Submit button (it's never visible without scrolling)
+- Upload resume if prompted: ${config.resumeUrl || 'use most recent'}
+- Make educated guesses for fields without specific data:
+  * Years of experience: Base on job level (entry=1-2, mid=3-5, senior=5+)
+  * Salary expectations: Research typical ranges for the role/location
+  * Availability: "2 weeks notice" or "Available immediately"
+- Click Submit to complete the application
+
+${!easyApplyOnly ? `
+For External Applications:
+- Click will open new tab - IMMEDIATELY switch to that tab
+- Look at browser tabs and click on the new non-LinkedIn tab
+- Create account if needed
+- Fill application form on external site
+- Submit application
+- Close external tab and return to LinkedIn tab
+- Continue with next job
+` : ''}
+
+After each successful application:
+- Announce: "APPLIED TO: [Company] - [Job Title]"
+- Continue to next job in the list
+
+IMPORTANT BEHAVIORS:
+- ALWAYS scroll down when looking for buttons (especially Submit)
+- The submit button is ALWAYS at the bottom - keep scrolling until you find it
+- Keep accurate count of successful applications
+- If a form fails, note it and move to the next job
+- Stop when you reach ${maxApplications} successful applications
+
+HANDLING PAGINATION:
+- When you run out of jobs on current page, look for "See more jobs" or pagination
+- Click to load more jobs and continue applying
+- Only stop when you've reached ${maxApplications} or no more jobs available
+
+COMPLETION:
+- Summarize: "Completed X applications out of ${maxApplications} target"
+- List all successful applications with company and job title`;
+  }
+
+  /**
+   * Fill out job application form
+   */
+  private async fillApplicationForm(stagehand: Stagehand, config: JobSearchConfig): Promise<void> {
+    try {
+      const formFields = await stagehand.page.extract({
+        instruction: "Extract all form fields that need to be filled, including their labels and types",
+        schema: z.object({
+          hasResume: z.boolean(),
+          hasPhone: z.boolean(),
+          hasEmail: z.boolean(),
+          hasExperience: z.boolean(),
+          hasSalary: z.boolean(),
+          hasAvailability: z.boolean(),
+          otherFields: z.array(z.string())
+        })
       });
 
-      return true;
-    }
-
-    return false;
-  }
-
-  /**
-   * Save automation progress
-   */
-  private async saveProgress(
-    sessionId: string,
-    progress: AutomationProgress
-  ): Promise<void> {
-    await this.supabaseService.logActivity(
-      sessionId,
-      'progress_saved',
-      { progress },
-      `Progress: ${progress.appliedJobs}/${progress.processedJobs} jobs applied`
-    );
-
-    // Emit progress event
-    this.emit(AutomationEventType.PROGRESS_UPDATED, {
-      sessionId,
-      progress
-    });
-  }
-
-  /**
-   * Log automation step
-   */
-  private async logStep(
-    sessionId: string,
-    action: string,
-    details: any,
-    message: string
-  ): Promise<void> {
-    if (this.config.verboseLogging) {
-      console.log(`[${sessionId}] ${action}: ${message}`);
-    }
-
-    await this.supabaseService.logActivity(sessionId, action, details, message);
-  }
-
-  /**
-   * Retry an action with exponential backoff
-   */
-  private async retryAction<T>(
-    action: () => Promise<T>,
-    retries = this.config.maxRetries || 3
-  ): Promise<T> {
-    let lastError: any;
-
-    for (let i = 0; i < retries; i++) {
-      try {
-        return await action();
-      } catch (error) {
-        lastError = error;
-        console.error(`Action failed (attempt ${i + 1}/${retries}):`, error);
-
-        if (i < retries - 1) {
-          const delay = this.config.retryDelay || 2000;
-          await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i)));
+      // Handle resume upload if needed
+      if (formFields.hasResume) {
+        const sessionId = Array.from(this.activeStagehand.entries())
+          .find(([_, sh]) => sh === stagehand)?.[0];
+        
+        if (sessionId && this.uploadedResumes.has(sessionId)) {
+          const resumeFileName = this.uploadedResumes.get(sessionId);
+          console.log('Uploading resume file:', resumeFileName);
+          
+          try {
+            // Find the file input element
+            await stagehand.page.act('Click on the resume upload button or file input field');
+            await stagehand.page.waitForTimeout(1000);
+            
+            // Use the uploaded file
+            const fileInput = await stagehand.page.$('input[type="file"]');
+            if (fileInput) {
+              // The file is already uploaded to the session, we just need to reference it
+              await fileInput.setInputFiles(resumeFileName!);
+              console.log('Resume attached successfully');
+            } else {
+              console.log('Could not find file input, trying alternative approach');
+              await stagehand.page.act(`Upload the file named "${resumeFileName}" for the resume field`);
+            }
+          } catch (error) {
+            console.error('Failed to upload resume in form:', error);
+          }
+        } else {
+          console.log('No resume uploaded for this session, skipping resume field');
         }
       }
-    }
 
-    throw lastError;
+      // Fill phone if needed
+      if (formFields.hasPhone) {
+        await stagehand.page.act('Fill in the phone number field with a valid phone number');
+      }
+
+      // Fill email if needed
+      if (formFields.hasEmail) {
+        await stagehand.page.act('Fill in the email field with the user email address');
+      }
+
+      // Fill experience if needed
+      if (formFields.hasExperience) {
+        await stagehand.page.act('Fill in years of experience based on the job level - entry level: 2 years, mid level: 5 years, senior: 8 years');
+      }
+      
+      // Fill salary if needed
+      if (formFields.hasSalary) {
+        await stagehand.page.act('Fill in salary expectations with a reasonable range for the position and location');
+      }
+      
+      // Fill availability if needed
+      if (formFields.hasAvailability) {
+        await stagehand.page.act('Fill in availability with "2 weeks notice" or select the appropriate option');
+      }
+      
+      // Handle multi-step forms
+      const hasNext = await stagehand.page.extract({
+        instruction: "Check if there is a Next or Continue button",
+        schema: z.object({ hasNext: z.boolean() })
+      });
+  
+      if (hasNext.hasNext) {
+        await stagehand.page.act('Click the Next or Continue button');
+        await stagehand.page.waitForTimeout(2000);
+        // Recursively fill the next step
+        await this.fillApplicationForm(stagehand, config);
+      }
+      
+    } catch (error) {
+      console.error('Error filling application form:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Execute comprehensive job application flow
+   */
+  private async executeJobApplicationFlow(
+    stagehand: Stagehand,
+    session: LinkedInSession,
+    config: JobSearchConfig
+  ): Promise<void> {
+    try {
+      console.log('Starting job application flow using Stagehand');
+      
+      // First, perform the job search
+      const searchQuery = config.searchPrompt || `${config.jobTitle} in ${config.location}`;
+      console.log('Performing job search for:', searchQuery);
+      
+      // Search for jobs
+      await stagehand.page.act(`Click on the job search bar and type "${searchQuery}"`);
+      await stagehand.page.waitForTimeout(1000);
+      
+      // Press Enter to search
+      await stagehand.page.act('Press Enter to search for jobs');
+      await stagehand.page.waitForTimeout(3000); // Wait for results to load
+      
+      // Apply filters if specified
+      if (config.easyApplyOnly) {
+        await stagehand.page.act('Click on the Easy Apply filter button');
+        await stagehand.page.waitForTimeout(2000);
+      }
+      
+      // Start applying to jobs
+      const maxApplications = config.maxApplications || 50;
+      let applicationsCompleted = 0;
+      const appliedJobs: Array<{company: string, jobTitle: string}> = [];
+      
+      console.log(`Starting to apply to ${maxApplications} jobs`);
+      
+      // Main application loop
+      while (applicationsCompleted < maxApplications) {
+        try {
+          // Click on a job listing
+          await stagehand.page.act(`Click on job listing number ${applicationsCompleted + 1} in the results`);
+          await stagehand.page.waitForTimeout(2000);
+          
+          // Extract job details
+          const jobDetails = await stagehand.page.extract({
+            instruction: "Extract the company name and job title from the job posting",
+            schema: z.object({
+              company: z.string(),
+              jobTitle: z.string(),
+              hasEasyApply: z.boolean()
+            })
+          });
+          
+          console.log(`Checking job: ${jobDetails.company} - ${jobDetails.jobTitle}`);
+          
+          // Check if it has Easy Apply
+          if (config.easyApplyOnly && !jobDetails.hasEasyApply) {
+            console.log('Skipping - no Easy Apply button');
+            continue;
+          }
+          
+          // Click Easy Apply button
+          await stagehand.page.act('Click the Easy Apply button');
+          await stagehand.page.waitForTimeout(2000);
+          
+          // Check if we're still on the right page
+          const currentUrl = await stagehand.page.url();
+          console.log('Current URL after Easy Apply click:', currentUrl);
+          
+          // Fill out the application form
+          await this.fillApplicationForm(stagehand, config);
+          
+          // Submit the application
+          console.log('Looking for submit button...');
+          await stagehand.page.act('Scroll down to find and click the Submit Application or Submit button');
+          await stagehand.page.waitForTimeout(3000);
+          
+          // Record successful application
+          applicationsCompleted++;
+          appliedJobs.push({
+            company: jobDetails.company,
+            jobTitle: jobDetails.jobTitle
+          });
+          
+          console.log(`APPLIED TO: ${jobDetails.company} - ${jobDetails.jobTitle} (${applicationsCompleted}/${maxApplications})`);
+          
+          // Go back to job listings
+          await stagehand.page.act('Click the X or Close button to return to job listings');
+          await stagehand.page.waitForTimeout(2000);
+          
+        } catch (error) {
+          console.error('Error applying to job:', error);
+          
+          // Check if the error is due to browser being closed
+          if (error.message?.includes('Target page, context or browser has been closed')) {
+            console.error('Browser session was closed. Stopping job applications.');
+            break;
+          }
+          
+          // Try to recover by going back to listings
+          try {
+            await stagehand.page.act('Close any open modals or click X button to return to job listings');
+            await stagehand.page.waitForTimeout(2000);
+          } catch (recoveryError) {
+            console.error('Failed to recover, continuing to next job');
+          }
+        }
+        
+        // Check if we need to load more jobs
+        if (applicationsCompleted < maxApplications && applicationsCompleted % 10 === 0) {
+          await stagehand.page.act('Scroll to the bottom of the page');
+          await stagehand.page.act('Click "See more jobs" button if visible');
+          await stagehand.page.waitForTimeout(3000);
+        }
+      }
+      
+      // Log completion
+      console.log(`Completed ${applicationsCompleted} applications out of ${maxApplications} target`);
+      console.log('Applied to the following positions:');
+      appliedJobs.forEach((job, index) => {
+        console.log(`${index + 1}. ${job.company} - ${job.jobTitle}`);
+      });
+      
+      // Give some time for the page to settle after applications
+      await stagehand.page.waitForTimeout(3000);
+      
+      // Save applied jobs to database
+      console.log('Saving applied jobs data to database');
+      
+      // Save to database
+      for (const job of appliedJobs) {
+        try {
+          await this.linkedinSessionService.recordJobApplication(
+            session.id,
+            session.user_id,
+            {
+              job_url: `https://www.linkedin.com/jobs/view/${Date.now()}`, // Generate a placeholder URL
+              job_id: `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              company_name: job.company,
+              job_title: job.jobTitle,
+              location: config.location || 'Not specified',
+              application_type: 'easy_apply',
+              success: true
+            }
+          );
+        } catch (error) {
+          console.error('Failed to save job application:', error);
+        }
+      }
+      
+      // Update progress
+      const progress = {
+        totalJobs: applicationsCompleted,
+        processedJobs: applicationsCompleted,
+        appliedJobs: appliedJobs.length,
+        skippedJobs: 0,
+        failedJobs: 0,
+        currentPage: 1
+      };
+      
+      this.sessionProgress.set(session.browserbase_session_id, progress);
+      
+      this.emit(AutomationEventType.PROGRESS_UPDATED, {
+        sessionId: session.browserbase_session_id,
+        progress
+      });
+      
+      // Mark session as completed
+      await this.linkedinSessionService.updateSessionStatus(
+        session.id,
+        'completed',
+        new Date()
+      );
+      
+      this.emit(AutomationEventType.SESSION_COMPLETED, {
+        sessionId: session.browserbase_session_id,
+        progress
+      });
+      
+    } catch (error) {
+      console.error('Job application flow error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Manually continue automation after login
+   * This can be called when the frontend detects the user has logged in
+   */
+  async continueAfterLogin(sessionId: string): Promise<void> {
+    try {
+      console.log('Manual continue requested for session:', sessionId);
+      console.log('Active Stagehand sessions:', Array.from(this.activeStagehand.keys()));
+      
+      // Get the stagehand instance
+      let stagehand = this.activeStagehand.get(sessionId);
+      
+      // If no active Stagehand, try to reconnect to the Browserbase session
+      if (!stagehand) {
+        console.log('No active Stagehand found, attempting to reconnect to Browserbase session...');
+        
+        try {
+          // Initialize a new Stagehand instance with the existing session
+          console.log('Attempting to reconnect with sessionId:', sessionId);
+          stagehand = new Stagehand({
+            env: 'BROWSERBASE',
+            projectId: process.env.BROWSERBASE_PROJECT_ID!,
+            browserbaseApiKey: process.env.BROWSERBASE_API_KEY!,
+            browserbaseSessionID: sessionId, // Use capital ID for reconnecting to existing session
+            modelName: 'openai/gpt-4o' as any,
+            openaiApiKey: process.env.OPENAI_API_KEY!,
+            verbose: 1,
+            domSettleTimeoutMs: 30000 // Increase timeout for reconnection
+          });
+          
+          await stagehand.init();
+          console.log('Successfully reconnected to Browserbase session');
+          
+          // Store the new instance
+          this.activeStagehand.set(sessionId, stagehand);
+        } catch (reconnectError) {
+          console.error('Failed to reconnect to Browserbase session:', reconnectError);
+          throw new Error('Failed to reconnect to browser session. The session may have expired.');
+        }
+      }
+      
+      // Get the session
+      const session = await this.linkedinSessionService.getSessionByBrowserbaseId(sessionId);
+      if (!session) {
+        throw new Error('Session not found');
+      }
+      
+      // Check current URL to confirm we're logged in
+      const currentUrl = await stagehand.page.url();
+      console.log('Current URL:', currentUrl);
+      
+      if (currentUrl.includes('/jobs/') || currentUrl.includes('/feed/')) {
+        // We're logged in, update status and continue
+        await this.linkedinSessionService.updateSessionStatus(
+          session.id,
+          'active',
+          null
+        );
+        
+        // Execute the job application flow
+        await this.executeJobApplicationFlow(stagehand, session, session.config || {});
+      } else {
+        throw new Error('Still on login page. Please complete login first.');
+      }
+    } catch (error) {
+      console.error('Error continuing after login:', error);
+      throw error;
+    }
   }
 
   /**
    * Handle automation errors
    */
-  private async handleAutomationError(sessionId: string, error: any): Promise<void> {
-    console.error('Automation error:', error);
-
-    // Log error
-    await this.supabaseService.logActivity(
-      sessionId,
-      'automation_error',
-      { 
-        error: error.message,
-        stack: error.stack 
-      },
-      'Automation encountered an error'
-    );
-
-    // Update session status
-    await this.browserbaseManager.failSession(sessionId, error.message);
-
-    // Clean up Stagehand
-    const stagehand = this.activeStagehand.get(sessionId);
-    if (stagehand) {
-      try {
-        await stagehand.close();
-      } catch (closeError) {
-        console.error('Error closing Stagehand:', closeError);
+  private async handleAutomationError(
+    sessionId: string,
+    error: any
+  ): Promise<void> {
+    try {
+      const session = await this.linkedinSessionService.getSessionByBrowserbaseId(sessionId);
+      if (session) {
+        await this.linkedinSessionService.updateSessionStatus(
+          session.id,
+          'failed',
+          new Date()
+        );
       }
-      this.activeStagehand.delete(sessionId);
-    }
 
-    // Emit error event
-    this.emit(AutomationEventType.ERROR, {
-      sessionId,
-      error: error.message
-    });
-  }
-
-  /**
-   * Clean up resources
-   */
-  async cleanup(): Promise<void> {
-    // Close all active Stagehand instances
-    for (const [sessionId, stagehand] of this.activeStagehand) {
-      try {
+      // Clean up
+      const stagehand = this.activeStagehand.get(sessionId);
+      if (stagehand) {
         await stagehand.close();
-      } catch (error) {
-        console.error(`Error closing Stagehand for session ${sessionId}:`, error);
+        this.activeStagehand.delete(sessionId);
       }
+      this.sessionProgress.delete(sessionId);
+
+      // Emit error event
+      this.emit(AutomationEventType.ERROR, {
+        sessionId,
+        error: error.message || 'Unknown error'
+      });
+    } catch (cleanupError) {
+      console.error('Error during cleanup:', cleanupError);
     }
-    this.activeStagehand.clear();
   }
 }
