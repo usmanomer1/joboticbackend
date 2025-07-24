@@ -19,19 +19,22 @@ graph TB
         SM[Session Manager]
         AM[Automation Manager]
         IM[Intervention Manager]
+        US[Upload Service]
     end
     
     subgraph "External Services"
         BB[Browserbase API]
         SH[Stagehand SDK]
         SUP[Supabase DB]
-        REDIS[Redis Cache]
+        SS[Supabase Storage]
+        OAI[OpenAI GPT-4o]
     end
     
     subgraph "Browser Infrastructure"
         BC[Browserbase Context]
         BS[Browser Session]
         LV[Live View]
+        UF[Uploaded Files]
     end
     
     UI -->|REST API| API
@@ -39,20 +42,26 @@ graph TB
     API --> SM
     API --> AM
     API --> IM
+    API --> US
     
     SM --> BB
-    SM --> REDIS
     SM --> SUP
     
     AM --> SH
     AM --> BS
+    AM --> OAI
     
     IM --> LV
     IM --> WSS
     
+    US --> SS
+    US --> BB
+    US --> UF
+    
     BB --> BC
     SH --> BS
     BS --> LV
+    UF --> BS
 ```
 
 ## Core Components
@@ -121,9 +130,11 @@ interface AutomationEngine {
   detectIntervention(): Promise<InterventionType | null>
   checkPageState(): Promise<PageState>
   
-  // Task execution
-  executeJobSearch(config: JobSearchConfig): Promise<void>
-  executeJobApplication(jobId: string, config: ApplicationConfig): Promise<void>
+  // Main execution flow (Browser Use-style)
+  executeJobApplicationFlow(config: JobSearchConfig): Promise<void>
+  
+  // Resume upload
+  uploadResumeFromSupabase(sessionId: string, resumeUrl: string): Promise<string>
   
   // State management
   saveState(): Promise<AutomationState>
@@ -336,13 +347,14 @@ CREATE INDEX idx_applied_jobs_automation_task_id ON applied_jobs(automation_task
 
 ## Implementation Details
 
-### 1. Session Isolation
+### 1. Session Isolation & Resume Upload
 
 ```typescript
 // src/services/browserbase/BrowserbaseService.ts
 export class BrowserbaseService {
   private browserbase: Browserbase;
   private contexts = new Map<string, ContextInfo>();
+  private uploadService: BrowserbaseUploadService;
 
   async createUserContext(userId: string): Promise<string> {
     // Create isolated context ID
@@ -389,65 +401,70 @@ export class BrowserbaseService {
 }
 ```
 
-### 2. Intervention Detection
+### 2. LinkedIn Automation with Resume Upload
 
 ```typescript
-// src/services/automation/InterventionDetector.ts
-export class InterventionDetector {
-  constructor(private stagehand: Stagehand) {}
+// src/services/linkedin/linkedinAutomationService.ts
+export class LinkedInAutomationService {
+  private uploadService: BrowserbaseUploadService;
+  private uploadedResumes = new Map<string, string>();
 
-  async detectIntervention(): Promise<InterventionResult | null> {
-    // Use Stagehand's observe to check page state
-    const observations = await this.stagehand.observe({
-      instruction: `
-        Check the current page for these conditions:
-        1. Is there a login form visible?
-        2. Is there a CAPTCHA present?
-        3. Is there a 2FA/verification code prompt?
-        4. Are there any error messages or unexpected popups?
-        5. Has the session expired?
-        
-        Return detailed information about any interventions needed.
-      `
-    });
-
-    // Analyze observations
-    for (const observation of observations) {
-      if (observation.description.toLowerCase().includes('login')) {
-        return { type: InterventionType.LOGIN, element: observation };
-      }
-      if (observation.description.toLowerCase().includes('captcha')) {
-        return { type: InterventionType.CAPTCHA, element: observation };
-      }
-      if (observation.description.toLowerCase().includes('verification') || 
-          observation.description.toLowerCase().includes('2fa')) {
-        return { type: InterventionType.TWO_FACTOR, element: observation };
-      }
-      if (observation.description.toLowerCase().includes('error')) {
-        return { type: InterventionType.ERROR_POPUP, element: observation };
-      }
+  async runAutomation(config: JobSearchConfig): Promise<JobSearchResult> {
+    // Upload resume if provided
+    if (config.resumeUrl) {
+      const uploadedFileName = await this.uploadService.uploadResumeFromSupabase(
+        session.browserbase_session_id,
+        config.resumeUrl
+      );
+      this.uploadedResumes.set(session.browserbase_session_id, uploadedFileName);
     }
 
-    // Additional checks using page evaluation
-    const pageChecks = await this.stagehand.page.evaluate(() => {
-      return {
-        hasPasswordField: !!document.querySelector('input[type="password"]'),
-        hasCaptchaFrame: !!document.querySelector('iframe[src*="captcha"]'),
-        hasErrorAlert: !!document.querySelector('[role="alert"], .error, .alert-danger'),
-        currentUrl: window.location.href
-      };
-    });
+    // Execute job application flow with comprehensive prompt
+    await this.executeJobApplicationFlow(config);
+  }
 
-    if (pageChecks.hasPasswordField && !this.isLoggedIn) {
-      return { type: InterventionType.LOGIN, pageChecks };
-    }
+  async executeJobApplicationFlow(config: JobSearchConfig): Promise<void> {
+    // Build comprehensive prompt for Browser Use-style automation
+    const prompt = this.buildComprehensivePrompt(config);
+    
+    // Execute the entire workflow in one comprehensive action
+    await this.stagehand.page.act(prompt);
+    
+    // Extract and save applied jobs
+    const appliedJobs = await this.extractAppliedJobs();
+    await this.saveAppliedJobs(appliedJobs);
+  }
 
-    return null;
+  private buildComprehensivePrompt(config: JobSearchConfig): string {
+    return `
+      Complete the following LinkedIn job application workflow:
+      
+      1. SEARCH FOR JOBS:
+         - Search for: "${config.searchQuery || config.jobTitle + ' ' + config.location}"
+         - Use the main search bar at the top of LinkedIn
+         - Press Enter after typing the search query
+      
+      2. FILTER RESULTS:
+         - Click "Jobs" tab if not already selected
+         - Apply filters: ${this.getFilterInstructions(config)}
+      
+      3. APPLY TO JOBS:
+         - Apply to ${config.targetJobCount || 10} jobs
+         - Only apply to jobs with "Easy Apply" button
+         - For each job:
+           a) Click on the job listing
+           b) Click "Easy Apply" button
+           c) Fill out all application forms
+           d) Upload resume when prompted
+           e) Submit the application
+      
+      Important: Scroll down after each action to load more jobs if needed.
+    `;
   }
 }
 ```
 
-### 3. Pause/Resume Implementation
+### 3. Intervention Detection & Session Persistence
 
 ```typescript
 // src/services/automation/StateManager.ts
@@ -808,23 +825,32 @@ logger.error('Automation failed', {
 });
 ```
 
-## Migration Checklist
+## Current Implementation Status
 
-- [ ] Set up Browserbase project and API keys
-- [ ] Implement SessionManager with user isolation
-- [ ] Create AutomationEngine with Stagehand integration  
-- [ ] Build API endpoints matching Browser Use interface
-- [ ] Implement WebSocket server for real-time updates
-- [ ] Create intervention detection and handling
-- [ ] Build pause/resume state management
-- [ ] Set up error handling and recovery
-- [ ] Implement session pooling for cost optimization
-- [ ] Add comprehensive logging and monitoring
-- [ ] Create database migrations
-- [ ] Test with multiple concurrent users
-- [ ] Verify security isolation between users
-- [ ] Performance testing and optimization
-- [ ] Documentation and deployment guide
+### ✅ Completed Features
+- [x] Browserbase integration with Stagehand
+- [x] Session management with user isolation
+- [x] Browser Use-style comprehensive automation prompts
+- [x] Resume upload from Supabase to Browserbase sessions
+- [x] Intervention detection (login, CAPTCHA, errors)
+- [x] Auto-resume after login with monitoring
+- [x] WebSocket real-time updates
+- [x] Structured data extraction for Supabase
+- [x] Progress tracking and event emissions
+- [x] Multi-tenant browser support
+
+### 🔧 Implementation Approach
+- **Automation Style**: Browser Use-style with comprehensive prompts
+- **AI Model**: OpenAI GPT-4o (replaced Gemini)
+- **Main Method**: `executeJobApplicationFlow()` (replaced deprecated granular methods)
+- **Resume Handling**: Upload service integrated for Supabase → Browserbase
+- **Session Persistence**: Context-based with cookie management
+
+### ⚠️ Deprecated Methods
+The following methods are marked as @deprecated and should not be used:
+- `performJobSearch()` - Use `executeJobApplicationFlow()` instead
+- `processJobListings()` - Use `executeJobApplicationFlow()` instead
+- `applyToJobs()` - This method never existed in the codebase
 
 ## Cost Considerations
 
