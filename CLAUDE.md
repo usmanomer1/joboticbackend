@@ -2,6 +2,8 @@
 
 This is a focused job search and matching backend service. It provides job search functionality through JSearch API integration and AI-powered job matching using Google Gemini.
 
+Important: you are never supposed to run the development server with npm run dev. 
+
 ## Core Functionality
 
 This service focuses exclusively on:

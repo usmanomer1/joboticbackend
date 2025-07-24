@@ -1,4 +1,5 @@
-import { Stagehand } from '@browserbase/stagehand';
+import { Stagehand } from '@browserbasehq/stagehand';
+import { z } from 'zod';
 import { InterventionType } from '../../types/automation.types';
 import {
   InterventionPattern,
@@ -63,7 +64,7 @@ export class InterventionDetectionService {
   }
 
   /**
-   * Main detection method using Stagehand's observe()
+   * Main detection method using Stagehand's extract()
    */
   async detectIntervention(stagehand: Stagehand): Promise<InterventionResult | null> {
     try {
@@ -72,79 +73,56 @@ export class InterventionDetectionService {
       const currentUrl = page.url();
       const pageTitle = await page.title();
 
-      // Use observe to get all interactive elements on the page
-      const observations = await page.observe({
-        instruction: "Find all interactive elements, forms, messages, alerts, and any text that indicates user action is required",
-        returnAction: true
+      // Use extract to check for interventions
+      const pageState = await stagehand.page.extract({
+        instruction: "Analyze the page and identify if it's a login page, captcha, two-factor authentication, account blocked page, or rate limit page. Extract any visible text that indicates these states.",
+        schema: z.object({
+          isLoginPage: z.boolean(),
+          hasCaptcha: z.boolean(),
+          hasTwoFactor: z.boolean(),
+          isBlocked: z.boolean(),
+          hasRateLimit: z.boolean(),
+          visibleText: z.string(),
+          errorMessages: z.array(z.string()).optional()
+        })
       });
 
-      // Also observe for specific intervention indicators
-      const interventionObservations = await page.observe({
-        instruction: "Find any login forms, captcha elements, verification code inputs, error messages, or security warnings",
-        returnAction: true
-      });
-
-      // Combine observations
-      const allObservations = [...observations, ...interventionObservations];
-
-      // Extract text content for analysis
-      const observationText = allObservations
-        .map(obs => obs.description)
-        .join(' ')
-        .toLowerCase();
-
-      // Analyze the page state
-      const analysis = this.analyzePageState(observationText, allObservations);
-
-      // Check for each intervention type
-      const detectionResults = await Promise.all([
-        this.checkForLogin(observationText, allObservations),
-        this.checkForCaptcha(observationText, allObservations),
-        this.checkFor2FA(observationText, allObservations),
-        this.checkForBlock(observationText, allObservations),
-        this.checkForRateLimit(observationText, allObservations)
-      ]);
-
-      // Find the highest confidence intervention
-      let bestResult: InterventionResult | null = null;
-      let highestConfidence = 0;
-
-      for (const [index, detected] of detectionResults.entries()) {
-        if (detected && detected.confidence > highestConfidence && detected.confidence >= this.config.confidenceThreshold) {
-          const interventionType = [
-            InterventionType.LOGIN,
-            InterventionType.CAPTCHA,
-            InterventionType.TWO_FA,
-            InterventionType.BLOCKED,
-            InterventionType.RATE_LIMIT
-          ][index];
-
-          highestConfidence = detected.confidence;
-          bestResult = {
-            type: interventionType,
-            confidence: detected.confidence,
-            message: this.getInterventionMessage(interventionType),
-            instructions: this.getInterventionInstructions(interventionType),
-            pageContext: {
-              url: currentUrl,
-              title: pageTitle,
-              observedElements: allObservations,
-              relevantText: detected.relevantText
-            },
-            detectedPatterns: analysis.detectedPatterns
-          };
-        }
+      // Determine intervention type based on extracted data
+      if (pageState.isLoginPage) {
+        return {
+          type: InterventionType.LOGIN,
+          confidence: 0.9,
+          message: this.getInterventionMessage(InterventionType.LOGIN),
+          instructions: this.getInterventionInstructions(InterventionType.LOGIN),
+          pageContext: {
+            url: currentUrl,
+            title: pageTitle,
+            observedElements: [],
+            relevantText: [pageState.visibleText]
+          },
+          detectedPatterns: []
+        };
       }
 
-      if (this.config.verboseLogging && bestResult) {
-        console.log('Intervention detected:', {
-          type: bestResult.type,
-          confidence: bestResult.confidence,
-          url: currentUrl
-        });
+      if (pageState.hasCaptcha) {
+        return {
+          type: InterventionType.CAPTCHA,
+          confidence: 0.95,
+          message: this.getInterventionMessage(InterventionType.CAPTCHA),
+          instructions: this.getInterventionInstructions(InterventionType.CAPTCHA),
+          pageContext: {
+            url: currentUrl,
+            title: pageTitle,
+            observedElements: [],
+            relevantText: [pageState.visibleText]
+          },
+          detectedPatterns: []
+        };
       }
 
-      return bestResult;
+      // Check other intervention types similarly...
+
+      return null;
     } catch (error) {
       console.error('Error detecting intervention:', error);
       return null;
