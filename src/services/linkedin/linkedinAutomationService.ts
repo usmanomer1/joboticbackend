@@ -49,6 +49,8 @@ export class LinkedInAutomationService extends EventEmitter {
   private uploadedResumes: Map<string, string> = new Map(); // sessionId -> uploadedFileName
   private jobCaches: Map<string, JobDataCache> = new Map();
   private metricsCollectors: Map<string, AutomationMetrics> = new Map();
+  private interventionCache = new Map<string, number>();
+  private readonly INTERVENTION_COOLDOWN = 5000; // 5 seconds
 
   constructor(
     browserbaseManager: BrowserbaseSessionManager,
@@ -412,7 +414,8 @@ export class LinkedInAutomationService extends EventEmitter {
       hybridFlow.on(AutomationEventType.APPLICATION_SAVED, (data) => this.emit(AutomationEventType.APPLICATION_SAVED, data));
       hybridFlow.on(AutomationEventType.APPLICATION_SUBMITTED, (data) => this.emit(AutomationEventType.APPLICATION_SUBMITTED, data));
       hybridFlow.on(AutomationEventType.SESSION_COMPLETED, (data) => this.emit(AutomationEventType.SESSION_COMPLETED, data));
-      hybridFlow.on(AutomationEventType.INTERVENTION_REQUIRED, (data) => this.emit(AutomationEventType.INTERVENTION_REQUIRED, data));
+      // Don't forward INTERVENTION_REQUIRED as it's already emitted with deduplication
+      // hybridFlow.on(AutomationEventType.INTERVENTION_REQUIRED, (data) => this.emit(AutomationEventType.INTERVENTION_REQUIRED, data));
       
       // Execute the flow
       await hybridFlow.execute();
@@ -494,8 +497,8 @@ export class LinkedInAutomationService extends EventEmitter {
         // Get the current URL
         const currentUrl = await stagehand.page.url();
         
-        // Emit intervention event
-        this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
+        // Emit intervention event with deduplication
+        this.emitInterventionWithDedup(sessionId, {
           sessionId,
           intervention: {
             type: detection.type,
@@ -527,6 +530,24 @@ export class LinkedInAutomationService extends EventEmitter {
       console.error('Error checking for intervention:', error);
       return false;
     }
+  }
+
+  /**
+   * Emit intervention event with deduplication
+   */
+  private emitInterventionWithDedup(sessionId: string, data: any): void {
+    const key = `${sessionId}-${data.intervention.type}`;
+    const lastEmit = this.interventionCache.get(key);
+    const now = Date.now();
+    
+    // Skip if same intervention was emitted recently
+    if (lastEmit && (now - lastEmit) < this.INTERVENTION_COOLDOWN) {
+      console.log(`Skipping duplicate intervention event for ${key}`);
+      return;
+    }
+    
+    this.interventionCache.set(key, now);
+    this.emit(AutomationEventType.INTERVENTION_REQUIRED, data);
   }
 
   /**
@@ -733,7 +754,8 @@ export class LinkedInAutomationService extends EventEmitter {
         hybridFlow.on(AutomationEventType.APPLICATION_SAVED, (data) => this.emit(AutomationEventType.APPLICATION_SAVED, data));
         hybridFlow.on(AutomationEventType.APPLICATION_SUBMITTED, (data) => this.emit(AutomationEventType.APPLICATION_SUBMITTED, data));
         hybridFlow.on(AutomationEventType.SESSION_COMPLETED, (data) => this.emit(AutomationEventType.SESSION_COMPLETED, data));
-        hybridFlow.on(AutomationEventType.INTERVENTION_REQUIRED, (data) => this.emit(AutomationEventType.INTERVENTION_REQUIRED, data));
+        // Don't forward INTERVENTION_REQUIRED as it's already emitted with deduplication
+      // hybridFlow.on(AutomationEventType.INTERVENTION_REQUIRED, (data) => this.emit(AutomationEventType.INTERVENTION_REQUIRED, data));
         
         // Execute the flow
         await hybridFlow.execute();

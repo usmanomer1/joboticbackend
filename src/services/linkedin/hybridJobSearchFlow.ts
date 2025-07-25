@@ -211,8 +211,20 @@ export class HybridJobSearchFlow extends EventEmitter {
    * Perform job search using cached observe/act pattern
    */
   private async performSearch(): Promise<void> {
-    const searchQuery = this.config.searchPrompt || 
-                       `${this.config.jobTitle} ${this.config.location}`.trim();
+    // Build search query with filters included
+    let searchQuery = this.config.searchPrompt || 
+                      `${this.config.jobTitle} ${this.config.location}`.trim();
+    
+    // Add filter keywords directly to search query if not already included
+    if (this.config.remote && !searchQuery.toLowerCase().includes('remote')) {
+      searchQuery += ' remote';
+    }
+    
+    if (this.config.easyApplyOnly && !searchQuery.toLowerCase().includes('easy apply')) {
+      searchQuery += ' easy apply';
+    }
+    
+    // Date posted still needs UI filter as LinkedIn doesn't support it in search
 
     this.emit(AutomationEventType.ACTION_PERFORMED, {
       sessionId: this.session.browserbase_session_id,
@@ -237,12 +249,18 @@ export class HybridJobSearchFlow extends EventEmitter {
 
   /**
    * Apply search filters using cached observe/act pattern
+   * Only applies filters that can't be done via search query
    */
   private async applyFilters(): Promise<void> {
-    if (this.config.easyApplyOnly) {
+    // Skip Easy Apply filter if already in search query
+    const searchQuery = this.config.searchPrompt || '';
+    const needsEasyApplyFilter = this.config.easyApplyOnly && 
+                                  !searchQuery.toLowerCase().includes('easy apply');
+    
+    if (needsEasyApplyFilter) {
       this.emit(AutomationEventType.ACTION_PERFORMED, {
         sessionId: this.session.browserbase_session_id,
-        action: 'Applying Easy Apply filter',
+        action: 'Applying Easy Apply filter via UI',
         timestamp: new Date()
       });
       
@@ -250,6 +268,7 @@ export class HybridJobSearchFlow extends EventEmitter {
       await this.stagehand.page.waitForTimeout(2000);
     }
 
+    // Date Posted always needs UI filter
     if (this.config.datePosted) {
       this.emit(AutomationEventType.ACTION_PERFORMED, {
         sessionId: this.session.browserbase_session_id,
@@ -259,15 +278,18 @@ export class HybridJobSearchFlow extends EventEmitter {
       
       await this.performCachedAction('Click on the Date Posted filter');
       await this.stagehand.page.waitForTimeout(1000);
-      // Dynamic content, use regular act
       await this.stagehand.page.act(`Select "${this.config.datePosted}" from the date options`);
       await this.stagehand.page.waitForTimeout(2000);
     }
 
-    if (this.config.remote) {
+    // Skip Remote filter if already in search query
+    const needsRemoteFilter = this.config.remote && 
+                             !searchQuery.toLowerCase().includes('remote');
+    
+    if (needsRemoteFilter) {
       this.emit(AutomationEventType.ACTION_PERFORMED, {
         sessionId: this.session.browserbase_session_id,
-        action: 'Applying Remote filter',
+        action: 'Applying Remote filter via UI',
         timestamp: new Date()
       });
       
@@ -298,7 +320,8 @@ export class HybridJobSearchFlow extends EventEmitter {
           isEasyApply: z.boolean().describe("Has Easy Apply button"),
           alreadyApplied: z.boolean().optional().describe("Shows 'Applied' label")
         }))
-      })
+      }),
+      useTextExtract: false
     });
 
     // Ensure we have valid data
