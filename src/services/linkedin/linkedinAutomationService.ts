@@ -128,6 +128,19 @@ export class LinkedInAutomationService extends EventEmitter {
         await stagehand.init();
         console.log('Stagehand initialized successfully');
         
+        // Ensure page is available after init
+        let retries = 0;
+        while (!stagehand.page && retries < 5) {
+          console.log(`Waiting for page to be ready... (attempt ${retries + 1}/5)`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          retries++;
+        }
+        
+        if (!stagehand.page) {
+          throw new Error('Failed to initialize Stagehand page after 5 attempts');
+        }
+        
+        console.log('Stagehand page is ready');
         this.activeStagehand.set(session.browserbase_session_id, stagehand);
       } catch (initError: any) {
         console.error('Stagehand initialization error:', initError);
@@ -439,6 +452,14 @@ export class LinkedInAutomationService extends EventEmitter {
     sessionId: string
   ): Promise<void> {
     try {
+      // Ensure page exists before navigation
+      if (!stagehand.page) {
+        console.error('No page object available in Stagehand');
+        throw new Error('Stagehand page not initialized');
+      }
+      
+      console.log('Navigating to LinkedIn Jobs...');
+      
       // Use domcontentloaded instead of networkidle to avoid timeout
       await stagehand.page.goto('https://www.linkedin.com/jobs/', {
         waitUntil: 'domcontentloaded',
