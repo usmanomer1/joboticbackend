@@ -380,4 +380,28 @@ export class LinkedInSessionService {
       return null;
     }
   }
+  
+  /**
+   * Get last session for a user
+   */
+  async getLastSessionForUser(userId: string): Promise<any> {
+    try {
+      const { data, error } = await this.supabase
+        .from('linkedin_sessions')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+        
+      if (error && error.code !== 'PGRST116') { // Ignore "no rows" error
+        throw error;
+      }
+      
+      return data;
+    } catch (error) {
+      console.error('Error getting last session:', error);
+      return null;
+    }
+  }
 }

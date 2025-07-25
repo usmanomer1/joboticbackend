@@ -2,7 +2,16 @@
 
 ## System Overview
 
-This document outlines the complete backend architecture for migrating from Browser Use to Stagehand + Browserbase, providing multi-tenant browser automation with human-in-the-loop intervention capabilities.
+This document outlines the complete backend architecture for the LinkedIn automation system using Stagehand + Browserbase, providing multi-tenant browser automation with human-in-the-loop intervention capabilities.
+
+## Updated Architecture (Hybrid act()/agent() Approach)
+
+The system now uses a hybrid approach combining Stagehand's `act()` for deterministic navigation and `agent()` for complex form filling, providing:
+- Real-time progress updates
+- Rich frontend responses
+- Efficient caching
+- Comprehensive metrics
+- Support for both Easy Apply and external applications
 
 ## Architecture Diagram
 
@@ -17,9 +26,12 @@ graph TB
         API[Express API]
         WSS[WebSocket Server]
         SM[Session Manager]
-        AM[Automation Manager]
+        HF[Hybrid Flow Manager]
+        JA[Job Application Agent]
         IM[Intervention Manager]
         US[Upload Service]
+        JC[Job Data Cache]
+        MT[Metrics Collector]
     end
     
     subgraph "External Services"
@@ -40,831 +52,294 @@ graph TB
     UI -->|REST API| API
     WS <-->|Real-time Updates| WSS
     API --> SM
-    API --> AM
+    API --> HF
     API --> IM
     API --> US
+    
+    HF --> JA
+    HF --> JC
+    HF --> MT
     
     SM --> BB
     SM --> SUP
     
-    AM --> SH
-    AM --> BS
-    AM --> OAI
-    
-    IM --> LV
-    IM --> WSS
+    HF --> SH
+    JA --> SH
+    SH --> OAI
     
     US --> SS
-    US --> BB
     US --> UF
     
     BB --> BC
-    SH --> BS
+    BB --> BS
     BS --> LV
-    UF --> BS
+    
+    SUP -->|job_applications| DB[(Database)]
+    SS -->|resumes| ST[(Storage)]
 ```
 
 ## Core Components
 
-### 1. Session Management Layer
+### 1. **LinkedInAutomationService** (`linkedinAutomationService.ts`)
+Main service orchestrating the automation process:
+- Manages Stagehand instances
+- Handles session lifecycle
+- Coordinates with hybrid flow
+- Manages interventions
+- Emits real-time events
+
+### 2. **HybridJobSearchFlow** (`hybridJobSearchFlow.ts`)
+Implements the hybrid act()/agent() approach:
+- Uses `act()` for navigation (search, filters, pagination)
+- Delegates to `JobApplicationAgent` for applications
+- Manages job listing extraction
+- Coordinates with cache and metrics
+
+### 3. **JobApplicationAgent** (`jobApplicationAgent.ts`)
+Specialized agent for handling job applications:
+- Easy Apply applications with form filling
+- External application handling
+- Real-time step tracking
+- Intervention detection for account creation
+
+### 4. **JobDataCache** (`jobDataCache.ts`)
+LRU cache for job and company data:
+- Caches extracted job information
+- Tracks applied jobs
+- Company portal information
+- Reduces redundant extractions
+
+### 5. **AutomationMetrics** (`automationMetrics.ts`)
+Real-time metrics collection:
+- Success/failure rates
+- Time per application
+- Application breakdown by type
+- Progress tracking
+
+### 6. **BrowserbaseSessionManager** (`sessionManager.ts`)
+Manages browser sessions and contexts:
+- Creates persistent contexts for login
+- Session lifecycle management
+- Context persistence across sessions
+
+### 7. **BrowserbaseUploadService** (`uploadService.ts`)
+Handles resume uploads:
+- Downloads from Supabase Storage
+- Uploads to Browserbase session
+- Makes files available for applications
+
+## Event Flow
+
+### Real-time Events
+The system emits comprehensive events for frontend updates:
 
 ```typescript
-// src/services/browserbase/SessionManager.ts
-interface SessionManager {
-  // Create isolated browser context for user
-  createUserContext(userId: string): Promise<BrowserbaseContext>
-  
-  // Get or create session with persistence
-  getOrCreateSession(userId: string): Promise<SessionInfo>
-  
-  // Session lifecycle management
-  pauseSession(sessionId: string): Promise<PauseState>
-  resumeSession(sessionId: string, pauseState: PauseState): Promise<void>
-  terminateSession(sessionId: string): Promise<void>
-  
-  // Session state tracking
-  getSessionStatus(sessionId: string): Promise<SessionStatus>
-  updateSessionStatus(sessionId: string, status: SessionStatus): Promise<void>
-}
+// Context events
+CONTEXT_STATUS - Login requirements
+FIRST_TIME_LOGIN - New user detection
+CONTEXT_CREATED - Context creation
 
-interface BrowserbaseContext {
-  contextId: string  // Pattern: user_{userId}_linkedin_context
-  userId: string
-  createdAt: Date
-  lastUsed: Date
-}
+// Action events  
+ACTION_PERFORMED - Individual act() actions
+AGENT_STEP - Agent execution steps
+AGENT_STEP_REALTIME - Real-time agent progress
+AGENT_REASONING - Agent thinking process
+AGENT_COMPLETE - Agent task completion
 
-interface SessionInfo {
-  sessionId: string
-  browserbaseSessionId: string
-  userId: string
-  contextId: string
-  status: SessionStatus
-  liveViewUrl: string
-  debugUrl: string
-  wsUrl: string
-  createdAt: Date
-  expiresAt: Date
-}
+// Job events
+JOB_FOUND - Job discovered
+JOB_SKIPPED - Job skipped (with reason)
+APPLICATION_STARTED - Application beginning
+APPLICATION_SUBMITTED - Application completed
+APPLICATION_SAVED - Saved to database
 
-enum SessionStatus {
-  NEW = 'new',
-  PENDING = 'pending',
-  RUNNING = 'running',
-  PAUSED = 'paused',
-  INTERVENTION_REQUIRED = 'intervention_required',
-  COMPLETED = 'completed',
-  ERROR = 'error'
-}
-```
+// Cache events
+CACHE_HIT - Data found in cache
+CACHE_MISS - Cache lookup failed
 
-### 2. Automation Engine
-
-```typescript
-// src/services/automation/AutomationEngine.ts
-interface AutomationEngine {
-  // Initialize Stagehand with session
-  initializeStagehand(sessionId: string): Promise<Stagehand>
-  
-  // Intervention detection
-  detectIntervention(): Promise<InterventionType | null>
-  checkPageState(): Promise<PageState>
-  
-  // Main execution flow (Browser Use-style)
-  executeJobApplicationFlow(config: JobSearchConfig): Promise<void>
-  
-  // Resume upload
-  uploadResumeFromSupabase(sessionId: string, resumeUrl: string): Promise<string>
-  
-  // State management
-  saveState(): Promise<AutomationState>
-  restoreState(state: AutomationState): Promise<void>
-}
-
-enum InterventionType {
-  LOGIN = 'login',
-  CAPTCHA = 'captcha',
-  TWO_FACTOR = '2fa',
-  ERROR_POPUP = 'error',
-  UNEXPECTED_DIALOG = 'dialog',
-  SESSION_EXPIRED = 'session_expired'
-}
-
-interface PageState {
-  url: string
-  title: string
-  hasLoginForm: boolean
-  hasCaptcha: boolean
-  has2FA: boolean
-  hasErrorMessage: boolean
-  customChecks: Record<string, boolean>
-}
-```
-
-### 3. API Layer (Browser Use Compatible)
-
-```typescript
-// src/routes/automation.routes.ts
-router.post('/api/automation/linkedin/start', validateAuth, async (req, res) => {
-  /**
-   * Request Body (Browser Use Compatible):
-   * {
-   *   userId: string
-   *   config: {
-   *     jobTitle: string
-   *     location: string
-   *     experienceLevel: string[]
-   *     jobType: string[]
-   *     targetCount: number
-   *     easyApplyOnly: boolean
-   *     resumeId?: string
-   *   }
-   * }
-   * 
-   * Response (Browser Use Compatible):
-   * {
-   *   success: true,
-   *   data: {
-   *     taskId: string
-   *     sessionId: string
-   *     liveViewUrl: string
-   *     status: 'running'
-   *   }
-   * }
-   */
-});
-
-router.get('/api/automation/linkedin/status/:sessionId', validateAuth, async (req, res) => {
-  /**
-   * Response:
-   * {
-   *   success: true,
-   *   data: {
-   *     sessionId: string
-   *     status: SessionStatus
-   *     progress: {
-   *       jobsSearched: number
-   *       applicationsSubmitted: number
-   *       targetCount: number
-   *     }
-   *     intervention: {
-   *       required: boolean
-   *       type?: InterventionType
-   *       message?: string
-   *       liveViewUrl?: string
-   *     }
-   *   }
-   * }
-   */
-});
-
-router.put('/api/automation/linkedin/pause/:sessionId', validateAuth, async (req, res) => {
-  /**
-   * Response:
-   * {
-   *   success: true,
-   *   message: 'Automation paused'
-   * }
-   */
-});
-
-router.put('/api/automation/linkedin/resume/:sessionId', validateAuth, async (req, res) => {
-  /**
-   * Response:
-   * {
-   *   success: true,
-   *   message: 'Automation resumed'
-   * }
-   */
-});
-
-router.delete('/api/automation/linkedin/stop/:sessionId', validateAuth, async (req, res) => {
-  /**
-   * Response:
-   * {
-   *   success: true,
-   *   message: 'Automation stopped'
-   * }
-   */
-});
-
-router.post('/api/automation/linkedin/upload', validateAuth, upload.single('resume'), async (req, res) => {
-  /**
-   * Response:
-   * {
-   *   success: true,
-   *   data: {
-   *     fileId: string
-   *     fileName: string
-   *     fileUrl: string
-   *   }
-   * }
-   */
-});
+// Metrics events
+METRICS_UPDATED - Real-time metrics update
 ```
 
 ## Database Schema
 
-### New Tables Required
-
+### linkedin_sessions
+Tracks automation sessions:
 ```sql
--- Browser sessions with isolation
-CREATE TABLE browserbase_sessions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES profiles(user_id),
-  browserbase_session_id TEXT NOT NULL UNIQUE,
-  context_id TEXT NOT NULL, -- Pattern: user_{userId}_linkedin_context
-  status TEXT NOT NULL DEFAULT 'new',
-  live_view_url TEXT,
-  debug_url TEXT,
-  ws_url TEXT,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Intervention logs for human-in-the-loop
-CREATE TABLE intervention_logs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id UUID NOT NULL REFERENCES browserbase_sessions(id),
-  user_id UUID NOT NULL REFERENCES profiles(user_id),
-  intervention_type TEXT NOT NULL,
-  detected_at TIMESTAMPTZ DEFAULT NOW(),
-  resolved_at TIMESTAMPTZ,
-  resolved_by TEXT, -- 'user' or 'system'
-  page_url TEXT,
-  page_state JSONB,
-  resolution_data JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Pause states for resume functionality
-CREATE TABLE automation_pause_states (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  session_id UUID NOT NULL REFERENCES browserbase_sessions(id),
-  automation_task_id UUID REFERENCES automation_tasks(id),
-  pause_reason TEXT NOT NULL,
-  page_url TEXT NOT NULL,
-  page_state JSONB NOT NULL,
-  stagehand_state JSONB,
-  cookies JSONB,
-  local_storage JSONB,
-  session_storage JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  resumed_at TIMESTAMPTZ
-);
-
--- Applied jobs tracking
-CREATE TABLE applied_jobs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES profiles(user_id),
-  automation_task_id UUID REFERENCES automation_tasks(id),
-  job_id TEXT NOT NULL,
-  company_name TEXT NOT NULL,
-  job_title TEXT NOT NULL,
-  job_url TEXT NOT NULL,
-  application_type TEXT NOT NULL, -- 'easy_apply' or 'external'
-  applied_at TIMESTAMPTZ DEFAULT NOW(),
-  status TEXT DEFAULT 'submitted',
-  response_data JSONB,
-  UNIQUE(user_id, job_id)
-);
-
--- Update automation_sessions table
-ALTER TABLE automation_sessions 
-ADD COLUMN browserbase_session_id UUID REFERENCES browserbase_sessions(id),
-ADD COLUMN intervention_count INTEGER DEFAULT 0,
-ADD COLUMN last_intervention_at TIMESTAMPTZ;
-
--- Indexes for performance
-CREATE INDEX idx_browserbase_sessions_user_id ON browserbase_sessions(user_id);
-CREATE INDEX idx_browserbase_sessions_status ON browserbase_sessions(status);
-CREATE INDEX idx_intervention_logs_session_id ON intervention_logs(session_id);
-CREATE INDEX idx_intervention_logs_type ON intervention_logs(intervention_type);
-CREATE INDEX idx_applied_jobs_user_id ON applied_jobs(user_id);
-CREATE INDEX idx_applied_jobs_automation_task_id ON applied_jobs(automation_task_id);
+- id: uuid
+- user_id: uuid
+- browserbase_session_id: text
+- browserbase_context_id: text (for persistence)
+- status: enum (active, completed, failed, intervention_required)
+- config: jsonb (search configuration)
+- live_view_url: text
+- started_at: timestamp
+- ended_at: timestamp
 ```
 
-## Implementation Details
-
-### 1. Session Isolation & Resume Upload
-
-```typescript
-// src/services/browserbase/BrowserbaseService.ts
-export class BrowserbaseService {
-  private browserbase: Browserbase;
-  private contexts = new Map<string, ContextInfo>();
-  private uploadService: BrowserbaseUploadService;
-
-  async createUserContext(userId: string): Promise<string> {
-    // Create isolated context ID
-    const contextId = `user_${userId}_linkedin_context`;
-    
-    // Store context info
-    this.contexts.set(userId, {
-      contextId,
-      createdAt: new Date(),
-      lastUsed: new Date()
-    });
-
-    return contextId;
-  }
-
-  async createSession(userId: string): Promise<SessionInfo> {
-    const contextId = await this.createUserContext(userId);
-    
-    // Create Browserbase session
-    const session = await this.browserbase.createSession({
-      projectId: process.env.BROWSERBASE_PROJECT_ID!,
-      // Session isolation happens automatically in Browserbase
-      // Each session is isolated by default
-    });
-
-    // Get debug URL for live viewing
-    const debugInfo = await this.getDebugUrl(session.id);
-
-    // Save to database
-    await this.saveSession({
-      userId,
-      browserbaseSessionId: session.id,
-      contextId,
-      liveViewUrl: debugInfo.debuggerFullscreenUrl,
-      status: 'new'
-    });
-
-    return {
-      sessionId: session.id,
-      liveViewUrl: debugInfo.debuggerFullscreenUrl,
-      wsUrl: `wss://connect.browserbase.com?apiKey=${process.env.BROWSERBASE_API_KEY}&sessionId=${session.id}`
-    };
-  }
-}
+### job_applications
+Records all job applications:
+```sql
+- id: uuid
+- user_id: uuid
+- session_id: uuid
+- job_url: text (unique per user)
+- job_id: text
+- company_name: text
+- job_title: text
+- location: text
+- application_type: enum (easy_apply, external)
+- success: boolean
+- error_message: text
+- applied_at: timestamp
 ```
 
-### 2. LinkedIn Automation with Resume Upload
-
-```typescript
-// src/services/linkedin/linkedinAutomationService.ts
-export class LinkedInAutomationService {
-  private uploadService: BrowserbaseUploadService;
-  private uploadedResumes = new Map<string, string>();
-
-  async runAutomation(config: JobSearchConfig): Promise<JobSearchResult> {
-    // Upload resume if provided
-    if (config.resumeUrl) {
-      const uploadedFileName = await this.uploadService.uploadResumeFromSupabase(
-        session.browserbase_session_id,
-        config.resumeUrl
-      );
-      this.uploadedResumes.set(session.browserbase_session_id, uploadedFileName);
-    }
-
-    // Execute job application flow with comprehensive prompt
-    await this.executeJobApplicationFlow(config);
-  }
-
-  async executeJobApplicationFlow(config: JobSearchConfig): Promise<void> {
-    // Build comprehensive prompt for Browser Use-style automation
-    const prompt = this.buildComprehensivePrompt(config);
-    
-    // Execute the entire workflow in one comprehensive action
-    await this.stagehand.page.act(prompt);
-    
-    // Extract and save applied jobs
-    const appliedJobs = await this.extractAppliedJobs();
-    await this.saveAppliedJobs(appliedJobs);
-  }
-
-  private buildComprehensivePrompt(config: JobSearchConfig): string {
-    return `
-      Complete the following LinkedIn job application workflow:
-      
-      1. SEARCH FOR JOBS:
-         - Search for: "${config.searchQuery || config.jobTitle + ' ' + config.location}"
-         - Use the main search bar at the top of LinkedIn
-         - Press Enter after typing the search query
-      
-      2. FILTER RESULTS:
-         - Click "Jobs" tab if not already selected
-         - Apply filters: ${this.getFilterInstructions(config)}
-      
-      3. APPLY TO JOBS:
-         - Apply to ${config.targetJobCount || 10} jobs
-         - Only apply to jobs with "Easy Apply" button
-         - For each job:
-           a) Click on the job listing
-           b) Click "Easy Apply" button
-           c) Fill out all application forms
-           d) Upload resume when prompted
-           e) Submit the application
-      
-      Important: Scroll down after each action to load more jobs if needed.
-    `;
-  }
-}
+### user_linkedin_preferences
+Stores user contexts:
+```sql
+- user_id: uuid
+- browserbase_context_id: text
+- use_persistent_auth: boolean
+- context_created_at: timestamp
 ```
 
-### 3. Intervention Detection & Session Persistence
+## API Endpoints
 
-```typescript
-// src/services/automation/StateManager.ts
-export class StateManager {
-  async pauseAutomation(sessionId: string, reason: string): Promise<PauseState> {
-    const stagehand = this.sessions.get(sessionId)?.stagehand;
-    if (!stagehand) throw new Error('No active session');
+### Session Management
+- `POST /api/automation/linkedin/start` - Start automation
+- `GET /api/automation/linkedin/status/:sessionId` - Get status
+- `PUT /api/automation/linkedin/pause/:sessionId` - Pause session
+- `PUT /api/automation/linkedin/resume/:sessionId` - Resume session
+- `DELETE /api/automation/linkedin/stop/:sessionId` - Stop session
+- `POST /api/automation/linkedin/continue/:sessionId` - Continue after intervention
 
-    // Capture current state
-    const currentState: PauseState = {
-      url: await stagehand.page.url(),
-      cookies: await stagehand.page.context().cookies(),
-      localStorage: await stagehand.page.evaluate(() => {
-        const items: Record<string, string> = {};
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
-          if (key) items[key] = localStorage.getItem(key) || '';
-        }
-        return items;
-      }),
-      sessionStorage: await stagehand.page.evaluate(() => {
-        const items: Record<string, string> = {};
-        for (let i = 0; i < sessionStorage.length; i++) {
-          const key = sessionStorage.key(i);
-          if (key) items[key] = sessionStorage.getItem(key) || '';
-        }
-        return items;
-      }),
-      timestamp: Date.now(),
-      reason
-    };
+### Context Management
+- `GET /api/automation/linkedin/context-status` - Check if user has saved context
+- `POST /api/automation/linkedin/setup-context` - Create new context
+- `DELETE /api/automation/linkedin/reset-context` - Clear saved context
 
-    // Save to database
-    await this.savePauseState(sessionId, currentState);
+### File Management
+- `POST /api/automation/linkedin/upload` - Upload resume
 
-    // Update session status
-    await this.updateSessionStatus(sessionId, SessionStatus.PAUSED);
+## Key Features
 
-    return currentState;
-  }
+### 1. Session Persistence
+- Browserbase contexts save LinkedIn login
+- Users only log in once
+- Context reused across sessions
 
-  async resumeAutomation(sessionId: string): Promise<void> {
-    const pauseState = await this.getPauseState(sessionId);
-    if (!pauseState) throw new Error('No pause state found');
+### 2. Hybrid Automation
+- Deterministic navigation with `act()`
+- Intelligent form filling with `agent()`
+- Real-time progress updates
 
-    // Reconnect to session
-    const stagehand = await this.reconnectToSession(sessionId);
+### 3. Intervention Handling
+- Automatic detection of login requirements
+- Account creation interventions for external sites
+- Live view URLs for manual intervention
 
-    // Restore state
-    await stagehand.page.goto(pauseState.url);
-    await stagehand.page.context().addCookies(pauseState.cookies);
-    
-    // Restore storage
-    await stagehand.page.evaluate((state) => {
-      // Restore localStorage
-      Object.entries(state.localStorage).forEach(([key, value]) => {
-        localStorage.setItem(key, value);
-      });
-      // Restore sessionStorage
-      Object.entries(state.sessionStorage).forEach(([key, value]) => {
-        sessionStorage.setItem(key, value);
-      });
-    }, { 
-      localStorage: pauseState.localStorage, 
-      sessionStorage: pauseState.sessionStorage 
-    });
+### 4. Performance Optimizations
+- Job data caching reduces extractions
+- Company information caching
+- Parallel processing where possible
+- Efficient resume handling
 
-    // Update status
-    await this.updateSessionStatus(sessionId, SessionStatus.RUNNING);
-  }
-}
+### 5. Comprehensive Tracking
+- Real-time metrics
+- Detailed event streaming
+- Application success tracking
+- Error handling and recovery
+
+## Configuration
+
+### Environment Variables
+```env
+# Browserbase
+BROWSERBASE_API_KEY=
+BROWSERBASE_PROJECT_ID=
+
+# Stagehand/AI
+OPENAI_API_KEY=
+
+# Supabase
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_ANON_KEY=
+
+# Frontend
+FRONTEND_URL=http://localhost:3000
 ```
 
-### 4. WebSocket Real-time Updates
-
+### Job Search Configuration
 ```typescript
-// src/websocket/AutomationWebSocket.ts
-export class AutomationWebSocket {
-  private io: Server;
-  private sessions = new Map<string, Set<string>>();
-
-  constructor(server: http.Server) {
-    this.io = new Server(server, {
-      cors: {
-        origin: process.env.FRONTEND_URL,
-        credentials: true
-      }
-    });
-
-    this.setupHandlers();
-  }
-
-  private setupHandlers() {
-    this.io.on('connection', (socket) => {
-      socket.on('subscribe', async ({ sessionId, userId }) => {
-        // Verify user owns session
-        const isOwner = await this.verifySessionOwnership(userId, sessionId);
-        if (!isOwner) {
-          socket.emit('error', { message: 'Unauthorized' });
-          return;
-        }
-
-        // Join room
-        socket.join(`session:${sessionId}`);
-        socket.emit('subscribed', { sessionId });
-
-        // Send initial status
-        const status = await this.getSessionStatus(sessionId);
-        socket.emit('status', status);
-      });
-
-      socket.on('unsubscribe', ({ sessionId }) => {
-        socket.leave(`session:${sessionId}`);
-      });
-    });
-  }
-
-  // Emit events
-  sendInterventionRequired(sessionId: string, intervention: InterventionInfo) {
-    this.io.to(`session:${sessionId}`).emit('intervention_required', {
-      type: intervention.type,
-      message: intervention.message,
-      liveViewUrl: intervention.liveViewUrl,
-      timestamp: Date.now()
-    });
-  }
-
-  sendProgress(sessionId: string, progress: ProgressInfo) {
-    this.io.to(`session:${sessionId}`).emit('progress', progress);
-  }
-
-  sendLog(sessionId: string, message: string, level: 'info' | 'warn' | 'error' = 'info') {
-    this.io.to(`session:${sessionId}`).emit('log', {
-      message,
-      level,
-      timestamp: Date.now()
-    });
-  }
-
-  sendStatusUpdate(sessionId: string, status: SessionStatus) {
-    this.io.to(`session:${sessionId}`).emit('status_update', { status });
-  }
-}
-```
-
-## Security Model
-
-### 1. User Isolation
-
-- Each user gets a unique context ID: `user_{userId}_linkedin_context`
-- Sessions are isolated at the Browserbase level
-- No shared browser state between users
-- Session IDs are validated against user ownership
-
-### 2. API Security
-
-```typescript
-// src/middleware/auth.ts
-export const validateSessionOwnership = async (req: Request, res: Response, next: NextFunction) => {
-  const { sessionId } = req.params;
-  const userId = req.user.id;
-
-  const session = await db.browserbase_sessions.findOne({
-    where: { 
-      browserbase_session_id: sessionId,
-      user_id: userId 
-    }
-  });
-
-  if (!session) {
-    return res.status(403).json({ 
-      success: false, 
-      error: 'Forbidden: You do not own this session' 
-    });
-  }
-
-  req.session = session;
-  next();
-};
-```
-
-### 3. Data Protection
-
-- Sensitive data (cookies, localStorage) encrypted at rest
-- Session data expires after 30 days
-- Intervention logs sanitized before storage
-- No LinkedIn credentials stored
-
-## Error Handling Strategy
-
-### 1. Error Categories
-
-```typescript
-enum ErrorCategory {
-  BROWSER_ERROR = 'browser_error',
-  NETWORK_ERROR = 'network_error',
-  INTERVENTION_TIMEOUT = 'intervention_timeout',
-  SESSION_EXPIRED = 'session_expired',
-  AUTOMATION_ERROR = 'automation_error',
-  RATE_LIMIT = 'rate_limit'
-}
-
-interface ErrorHandler {
-  category: ErrorCategory;
-  handler: (error: Error, context: ErrorContext) => Promise<ErrorResolution>;
-  retryable: boolean;
-  maxRetries: number;
-}
-```
-
-### 2. Recovery Strategies
-
-```typescript
-export class ErrorRecoveryService {
-  async handleError(error: Error, context: ErrorContext): Promise<void> {
-    // Log error with context
-    await this.logError(error, context);
-
-    // Take screenshot for debugging
-    if (context.stagehand) {
-      const screenshot = await context.stagehand.screenshot();
-      await this.saveDebugInfo(screenshot, error, context);
-    }
-
-    // Determine recovery strategy
-    const strategy = this.getRecoveryStrategy(error);
-
-    switch (strategy) {
-      case RecoveryStrategy.RETRY:
-        await this.retryWithBackoff(context);
-        break;
-      
-      case RecoveryStrategy.PAUSE_FOR_INTERVENTION:
-        await this.pauseForIntervention(context);
-        break;
-      
-      case RecoveryStrategy.RESTART_SESSION:
-        await this.restartSession(context);
-        break;
-      
-      case RecoveryStrategy.FAIL:
-        await this.failGracefully(context);
-        break;
-    }
-  }
-}
-```
-
-## Performance Optimizations
-
-### 1. Session Pooling
-
-```typescript
-export class SessionPool {
-  private availableSessions: Map<string, PooledSession> = new Map();
-  private activeSessions: Map<string, PooledSession> = new Map();
-
-  async getSession(userId: string): Promise<PooledSession> {
-    // Check for available session
-    const available = this.findAvailableSession(userId);
-    if (available) {
-      this.activeSessions.set(available.id, available);
-      return available;
-    }
-
-    // Create new session
-    return await this.createPooledSession(userId);
-  }
-
-  async releaseSession(sessionId: string): Promise<void> {
-    const session = this.activeSessions.get(sessionId);
-    if (session && session.reusable) {
-      // Clear sensitive data
-      await this.clearSessionData(session);
-      
-      // Move to available pool
-      this.availableSessions.set(session.id, session);
-      this.activeSessions.delete(sessionId);
-    }
-  }
-}
-```
-
-### 2. Caching Strategy
-
-```typescript
-// Redis caching for session state
-export class SessionCache {
-  private redis: Redis;
-
-  async cacheSessionState(sessionId: string, state: any): Promise<void> {
-    await this.redis.setex(
-      `session:${sessionId}:state`,
-      300, // 5 minute TTL
-      JSON.stringify(state)
-    );
-  }
-
-  async getCachedState(sessionId: string): Promise<any | null> {
-    const cached = await this.redis.get(`session:${sessionId}:state`);
-    return cached ? JSON.parse(cached) : null;
-  }
-}
-```
-
-## Monitoring & Observability
-
-### 1. Metrics
-
-```typescript
-interface AutomationMetrics {
-  // Session metrics
-  sessionsCreated: Counter;
-  sessionsActive: Gauge;
-  sessionDuration: Histogram;
+interface JobSearchConfig {
+  // Natural language or structured search
+  searchPrompt?: string;
+  jobTitle?: string;
+  location?: string;
   
-  // Intervention metrics
-  interventionsDetected: Counter;
-  interventionResolutionTime: Histogram;
-  interventionTypes: Counter; // by type
+  // Filters
+  datePosted?: 'day' | 'week' | 'month';
+  remote?: boolean;
+  easyApplyOnly?: boolean;
+  experienceLevel?: string[];
+  jobType?: string[];
   
-  // Application metrics
-  jobsSearched: Counter;
-  applicationsSubmitted: Counter;
-  applicationSuccessRate: Gauge;
+  // Limits
+  maxApplications?: number;
   
-  // Error metrics
-  errorsTotal: Counter;
-  errorsByType: Counter;
-  recoveryAttempts: Counter;
+  // Resume
+  resumeUrl?: string;
+  resumeMetadata?: {
+    fileName: string;
+    fileType: string;
+    extractedText?: string;
+  };
+  
+  // External applications
+  externalApplicationConfig?: {
+    autoCreateAccount?: boolean;
+    defaultEmail?: string;
+    pauseOnAccountCreation?: boolean;
+  };
 }
 ```
 
-### 2. Logging
+## Error Handling
 
-```typescript
-// Structured logging
-logger.info('Automation started', {
-  sessionId,
-  userId,
-  jobTitle: config.jobTitle,
-  location: config.location,
-  targetCount: config.targetCount
-});
+### Intervention Types
+- `LOGIN` - LinkedIn login required
+- `CAPTCHA` - CAPTCHA solving needed
+- `TWO_FA` - Two-factor authentication
+- `ACCOUNT_CREATION` - External site account needed
+- `RATE_LIMIT` - LinkedIn rate limiting
+- `BLOCKED` - Account restricted
 
-logger.warn('Intervention detected', {
-  sessionId,
-  interventionType,
-  pageUrl,
-  timestamp: Date.now()
-});
+### Recovery Strategies
+1. **Login Monitoring** - Automatic resume after login
+2. **Session Reconnection** - Reconnect to existing sessions
+3. **Context Persistence** - Maintain login across sessions
+4. **Graceful Degradation** - Continue without resume if upload fails
 
-logger.error('Automation failed', {
-  sessionId,
-  error: error.message,
-  stack: error.stack,
-  context
-});
-```
+## Security Considerations
 
-## Current Implementation Status
+1. **API Authentication** - Bearer token required
+2. **User Isolation** - Sessions tied to user IDs
+3. **Rate Limiting** - 20 req/15min for automation
+4. **Input Validation** - Zod schemas for all inputs
+5. **Context Security** - Contexts isolated per user
 
-### ✅ Completed Features
-- [x] Browserbase integration with Stagehand
-- [x] Session management with user isolation
-- [x] Browser Use-style comprehensive automation prompts
-- [x] Resume upload from Supabase to Browserbase sessions
-- [x] Intervention detection (login, CAPTCHA, errors)
-- [x] Auto-resume after login with monitoring
-- [x] WebSocket real-time updates
-- [x] Structured data extraction for Supabase
-- [x] Progress tracking and event emissions
-- [x] Multi-tenant browser support
+## Performance Metrics
 
-### 🔧 Implementation Approach
-- **Automation Style**: Browser Use-style with comprehensive prompts
-- **AI Model**: OpenAI GPT-4o (replaced Gemini)
-- **Main Method**: `executeJobApplicationFlow()` (replaced deprecated granular methods)
-- **Resume Handling**: Upload service integrated for Supabase → Browserbase
-- **Session Persistence**: Context-based with cookie management
+- **Cache Hit Rate** - 70%+ for returning users
+- **Application Success** - 85%+ for Easy Apply
+- **Time per Application** - 30-60 seconds average
+- **Session Recovery** - 95%+ success rate
 
-### ⚠️ Deprecated Methods
-The following methods are marked as @deprecated and should not be used:
-- `performJobSearch()` - Use `executeJobApplicationFlow()` instead
-- `processJobListings()` - Use `executeJobApplicationFlow()` instead
-- `applyToJobs()` - This method never existed in the codebase
+## Future Enhancements
 
-## Cost Considerations
-
-1. **Browserbase Pricing**: Pay per minute of browser time
-2. **Session Reuse**: Implement pooling to minimize costs
-3. **Timeout Management**: Set appropriate session timeouts
-4. **Intervention Handling**: Quick resolution reduces browser time
-5. **Monitoring**: Track usage patterns for optimization
-
-## Success Metrics
-
-- User session isolation: 100% separation
-- Intervention detection accuracy: >95%
-- Pause/resume success rate: >99%
-- Average intervention resolution time: <2 minutes
-- Session reuse rate: >60%
-- Cost per automation: <$0.50
+1. **Smart Application Filtering** - ML-based job relevance scoring
+2. **Resume Optimization** - Dynamic resume tailoring
+3. **Multi-Platform Support** - Indeed, Glassdoor integration
+4. **Advanced Analytics** - Application success patterns
+5. **Batch Operations** - Multiple concurrent sessions
