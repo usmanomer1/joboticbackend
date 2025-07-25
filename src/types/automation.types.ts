@@ -128,6 +128,9 @@ export interface JobSearchConfig {
   // Context configuration for persistent authentication
   useContext?: boolean;
   createNewContext?: boolean;
+  
+  // Debug mode - WARNING: This creates a second session in Browserbase!
+  enableDebugMode?: boolean;
 }
 
 export interface AutomationSession {
