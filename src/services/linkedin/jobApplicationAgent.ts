@@ -2,6 +2,7 @@ import { Stagehand } from '@browserbasehq/stagehand';
 import { z } from 'zod';
 import { EventEmitter } from 'events';
 import { AutomationEventType } from '../../types/automation.types';
+import { ObserveCache } from './observeCache';
 
 interface JobApplicationContext {
   jobTitle: string;
@@ -32,12 +33,43 @@ export class JobApplicationAgent extends EventEmitter {
   private sessionId: string;
   private context: JobApplicationContext;
   private steps: AgentStep[] = [];
+  private observeCache: ObserveCache;
 
   constructor(stagehand: Stagehand, sessionId: string, context: JobApplicationContext) {
     super();
     this.stagehand = stagehand;
     this.sessionId = sessionId;
     this.context = context;
+    this.observeCache = new ObserveCache();
+  }
+
+  /**
+   * Perform action using observe/act pattern with caching
+   */
+  private async performCachedAction(instruction: string): Promise<void> {
+    try {
+      let observeResult = this.observeCache.get(instruction);
+      
+      if (!observeResult) {
+        const observeResults = await this.stagehand.page.observe({
+          instruction,
+          returnAction: true
+        });
+        
+        if (observeResults && observeResults.length > 0) {
+          observeResult = observeResults[0];
+          this.observeCache.set(instruction, observeResult);
+        }
+      }
+      
+      if (observeResult) {
+        await this.stagehand.page.act(observeResult);
+      } else {
+        await this.stagehand.page.act(instruction);
+      }
+    } catch (error) {
+      await this.stagehand.page.act(instruction);
+    }
   }
 
   /**
@@ -47,9 +79,9 @@ export class JobApplicationAgent extends EventEmitter {
     try {
       this.emitStep('Starting Easy Apply application', { company: this.context.company });
 
-      // Click Easy Apply button using act()
+      // Click Easy Apply button using cached observe/act
       await this.performAction('Click the Easy Apply button', async () => {
-        await this.stagehand.page.act('Click the Easy Apply button');
+        await this.performCachedAction('Click the Easy Apply button');
       });
 
       // Wait for form to load
@@ -82,9 +114,9 @@ export class JobApplicationAgent extends EventEmitter {
     try {
       this.emitStep('Starting external application', { company: this.context.company });
 
-      // Click Apply button using act()
+      // Click Apply button using cached observe/act
       await this.performAction('Click the Apply button', async () => {
-        await this.stagehand.page.act('Click the Apply button');
+        await this.performCachedAction('Click the Apply button');
       });
 
       // Wait for new tab/window or redirect

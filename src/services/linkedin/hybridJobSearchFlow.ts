@@ -3,13 +3,14 @@ import { z } from 'zod';
 import { EventEmitter } from 'events';
 import { 
   JobSearchConfig, 
-  AutomationEventType,
-  LinkedInSession
+  AutomationEventType
 } from '../../types/automation.types';
+import type { LinkedInSession } from '../supabase/linkedinSessionService';
 import { JobApplicationAgent } from './jobApplicationAgent';
 import { JobDataCache } from './jobDataCache';
 import { AutomationMetrics } from './automationMetrics';
 import { LinkedInSessionService } from '../supabase/linkedinSessionService';
+import { ObserveCache, ObserveResult } from './observeCache';
 
 interface JobListing {
   jobId: string;
@@ -32,6 +33,7 @@ export class HybridJobSearchFlow extends EventEmitter {
   private metrics: AutomationMetrics;
   private linkedinSessionService: LinkedInSessionService;
   private applicationAgent: JobApplicationAgent;
+  private observeCache: ObserveCache;
 
   constructor(
     stagehand: Stagehand,
@@ -48,6 +50,7 @@ export class HybridJobSearchFlow extends EventEmitter {
     this.cache = cache;
     this.metrics = metrics;
     this.linkedinSessionService = linkedinSessionService;
+    this.observeCache = new ObserveCache();
 
     // Create application agent
     this.applicationAgent = new JobApplicationAgent(stagehand, session.browserbase_session_id, {
@@ -67,6 +70,48 @@ export class HybridJobSearchFlow extends EventEmitter {
     this.applicationAgent.on(AutomationEventType.AGENT_STEP_REALTIME, (data) => this.emit(AutomationEventType.AGENT_STEP_REALTIME, data));
     this.applicationAgent.on(AutomationEventType.ACTION_PERFORMED, (data) => this.emit(AutomationEventType.ACTION_PERFORMED, data));
     this.applicationAgent.on(AutomationEventType.AGENT_COMPLETE, (data) => this.emit(AutomationEventType.AGENT_COMPLETE, data));
+  }
+
+  /**
+   * Perform action using observe/act pattern with caching
+   * Falls back to regular act() if observe fails
+   */
+  private async performCachedAction(instruction: string): Promise<void> {
+    try {
+      // Check cache first
+      let observeResult = this.observeCache.get(instruction);
+      
+      if (!observeResult) {
+        // No cache hit, perform observe
+        console.log(`Observing action: ${instruction}`);
+        const observeResults = await this.stagehand.page.observe({
+          instruction,
+          returnAction: true
+        });
+        
+        if (observeResults && observeResults.length > 0) {
+          observeResult = observeResults[0];
+          // Cache the result for future use
+          this.observeCache.set(instruction, observeResult);
+          console.log(`Cached observe result for: ${instruction}`);
+        }
+      } else {
+        console.log(`Using cached observe result for: ${instruction}`);
+      }
+      
+      // Use observe result if available, otherwise fall back to regular act
+      if (observeResult) {
+        await this.stagehand.page.act(observeResult);
+      } else {
+        console.log(`Falling back to regular act for: ${instruction}`);
+        await this.stagehand.page.act(instruction);
+      }
+      
+    } catch (error) {
+      console.error(`Error in performCachedAction: ${error.message}, falling back to regular act`);
+      // Fall back to regular act on any error
+      await this.stagehand.page.act(instruction);
+    }
   }
 
   /**
@@ -149,7 +194,7 @@ export class HybridJobSearchFlow extends EventEmitter {
   }
 
   /**
-   * Navigate to LinkedIn jobs page using act()
+   * Navigate to LinkedIn jobs page using cached observe/act pattern
    */
   private async navigateToJobs(): Promise<void> {
     this.emit(AutomationEventType.ACTION_PERFORMED, {
@@ -158,12 +203,12 @@ export class HybridJobSearchFlow extends EventEmitter {
       timestamp: new Date()
     });
 
-    await this.stagehand.page.act('Navigate to LinkedIn Jobs page');
+    await this.performCachedAction('Navigate to LinkedIn Jobs page');
     await this.stagehand.page.waitForTimeout(3000);
   }
 
   /**
-   * Perform job search using act()
+   * Perform job search using cached observe/act pattern
    */
   private async performSearch(): Promise<void> {
     const searchQuery = this.config.searchPrompt || 
@@ -175,22 +220,23 @@ export class HybridJobSearchFlow extends EventEmitter {
       timestamp: new Date()
     });
 
-    // Click search bar and enter query
-    await this.stagehand.page.act('Click on the job search input field');
+    // Click search bar and enter query using cached actions
+    await this.performCachedAction('Click on the job search input field');
     await this.stagehand.page.waitForTimeout(500);
     
-    await this.stagehand.page.act('Clear the search field');
+    await this.performCachedAction('Clear the search field');
     await this.stagehand.page.waitForTimeout(500);
     
+    // For dynamic content like search query, we still use regular act
     await this.stagehand.page.act(`Type "${searchQuery}" in the search field`);
     await this.stagehand.page.waitForTimeout(1000);
     
-    await this.stagehand.page.act('Press Enter or click Search to perform the search');
+    await this.performCachedAction('Press Enter or click Search to perform the search');
     await this.stagehand.page.waitForTimeout(3000);
   }
 
   /**
-   * Apply search filters using act()
+   * Apply search filters using cached observe/act pattern
    */
   private async applyFilters(): Promise<void> {
     if (this.config.easyApplyOnly) {
@@ -200,7 +246,7 @@ export class HybridJobSearchFlow extends EventEmitter {
         timestamp: new Date()
       });
       
-      await this.stagehand.page.act('Click on the Easy Apply filter toggle');
+      await this.performCachedAction('Click on the Easy Apply filter toggle');
       await this.stagehand.page.waitForTimeout(2000);
     }
 
@@ -211,8 +257,9 @@ export class HybridJobSearchFlow extends EventEmitter {
         timestamp: new Date()
       });
       
-      await this.stagehand.page.act('Click on the Date Posted filter');
+      await this.performCachedAction('Click on the Date Posted filter');
       await this.stagehand.page.waitForTimeout(1000);
+      // Dynamic content, use regular act
       await this.stagehand.page.act(`Select "${this.config.datePosted}" from the date options`);
       await this.stagehand.page.waitForTimeout(2000);
     }
@@ -224,7 +271,7 @@ export class HybridJobSearchFlow extends EventEmitter {
         timestamp: new Date()
       });
       
-      await this.stagehand.page.act('Click on the Remote filter toggle');
+      await this.performCachedAction('Click on the Remote filter toggle');
       await this.stagehand.page.waitForTimeout(2000);
     }
   }
@@ -254,12 +301,26 @@ export class HybridJobSearchFlow extends EventEmitter {
       })
     });
 
+    // Ensure we have valid data
+    if (!jobsData || !jobsData.jobs) {
+      console.warn('No jobs data extracted');
+      return [];
+    }
+
     // Cache the job data
     for (const job of jobsData.jobs) {
-      this.cache.setJob({
-        ...job,
+      // Ensure the job data matches CachedJobData interface
+      const jobDataToCache = {
+        jobId: job.jobId,
+        company: job.company,
+        jobTitle: job.jobTitle,
+        location: job.location,
+        jobUrl: job.jobUrl,
+        isEasyApply: job.isEasyApply,
         extractedAt: new Date()
-      });
+      };
+      
+      this.cache.setJob(jobDataToCache);
       
       this.emit(AutomationEventType.JOB_FOUND, {
         sessionId: this.session.browserbase_session_id,
@@ -345,8 +406,8 @@ export class HybridJobSearchFlow extends EventEmitter {
         });
       }
 
-      // Return to job listings
-      await this.stagehand.page.act('Go back to job listings by clicking the back button or X');
+      // Return to job listings using cached action
+      await this.performCachedAction('Go back to job listings by clicking the back button or X');
       await this.stagehand.page.waitForTimeout(2000);
 
       return success;
@@ -354,11 +415,11 @@ export class HybridJobSearchFlow extends EventEmitter {
     } catch (error) {
       console.error(`Error processing job ${job.jobId}:`, error);
       
-      this.metrics.completeApplication(job.jobId, false, error.message);
+      this.metrics.completeApplication(job.jobId, false, error instanceof Error ? error.message : String(error));
       
-      // Try to recover and go back to listings
+      // Try to recover and go back to listings using cached action
       try {
-        await this.stagehand.page.act('Close any open modals or go back to job listings');
+        await this.performCachedAction('Close any open modals or go back to job listings');
         await this.stagehand.page.waitForTimeout(2000);
       } catch (recoveryError) {
         console.error('Failed to recover:', recoveryError);
@@ -388,7 +449,7 @@ export class HybridJobSearchFlow extends EventEmitter {
           timestamp: new Date()
         });
 
-        await this.stagehand.page.act('Click the Next page button');
+        await this.performCachedAction('Click the Next page button');
         await this.stagehand.page.waitForTimeout(3000);
         return true;
       }
