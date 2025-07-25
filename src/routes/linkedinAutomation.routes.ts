@@ -39,6 +39,7 @@ router.post('/continue-noauth/:sessionId', async (req, res) => {
   }
 });
 
+
 // Apply authentication middleware to all routes
 router.use(controller.validateAuth.bind(controller));
 
