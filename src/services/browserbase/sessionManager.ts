@@ -95,15 +95,23 @@ export class BrowserbaseSessionManager {
       liveViewUrl = `https://www.browserbase.com/sessions/${browserbaseSession.id}/live`;
       console.log(`[BROWSERBASE-${sessionCallId}] Using live view URL:`, liveViewUrl);
       
-      // Optionally, we can still get debug URLs for logging purposes
-      try {
-        const debugUrls = await this.getSessionDebugUrls(browserbaseSession.id);
-        console.log(`[BROWSERBASE-${sessionCallId}] Debug URLs available:`, {
-          debuggerUrl: debugUrls.debuggerUrl,
-          debuggerFullscreenUrl: debugUrls.debuggerFullscreenUrl
-        });
-      } catch (error) {
-        console.warn('Failed to get debug URLs (non-critical):', error);
+      // IMPORTANT: Do NOT call getSessionDebugUrls() here!
+      // Calling getSessionDebugUrls() creates a SECOND session in Browserbase
+      // Only call it if explicitly needed for debugging purposes
+      
+      // If debug mode is explicitly requested, get debug URLs
+      if (config.enableDebugMode) {
+        try {
+          const debugUrls = await this.getSessionDebugUrls(browserbaseSession.id);
+          console.log(`[BROWSERBASE-${sessionCallId}] Debug mode enabled - Debug URLs:`, {
+            debuggerUrl: debugUrls.debuggerUrl,
+            debuggerFullscreenUrl: debugUrls.debuggerFullscreenUrl
+          });
+          // In debug mode, use the debug URL instead
+          liveViewUrl = debugUrls.debuggerFullscreenUrl || liveViewUrl;
+        } catch (error) {
+          console.warn('Failed to get debug URLs:', error);
+        }
       }
 
       // Create session record in our database with context info
