@@ -67,7 +67,7 @@ export class BrowserbaseSessionManager {
       // Create Browserbase session with optional context
       const sessionOptions: any = {
         projectId: this.projectId,
-        proxies: true,
+        proxies: false, // Temporarily disabled due to tunnel connection issues
         timeout: 3600 // 1 hour in seconds
       };
 
