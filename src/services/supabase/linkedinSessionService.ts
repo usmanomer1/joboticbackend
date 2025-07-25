@@ -71,6 +71,11 @@ export class LinkedInSessionService {
     config?: any,
     contextId?: string
   ): Promise<LinkedInSession> {
+    const dbCallId = Math.random().toString(36).substring(7);
+    console.log(`\n[DB-${dbCallId}] >>>>> Creating LinkedIn session in database at ${new Date().toISOString()}`);
+    console.log(`[DB-${dbCallId}] User: ${userId}`);
+    console.log(`[DB-${dbCallId}] Browserbase Session: ${browserbaseSessionId}`);
+    
     const sessionData: any = {
       user_id: userId,
       browserbase_session_id: browserbaseSessionId,
@@ -84,6 +89,7 @@ export class LinkedInSessionService {
       sessionData.browserbase_context_id = contextId;
     }
 
+    console.log(`[DB-${dbCallId}] Inserting session data...`);
     const { data, error } = await this.supabase
       .from('linkedin_sessions')
       .insert(sessionData)
@@ -91,10 +97,16 @@ export class LinkedInSessionService {
       .single();
 
     if (error) {
-      console.error('Error creating LinkedIn session:', error);
+      console.error(`[DB-${dbCallId}] Error creating LinkedIn session:`, error);
       throw new Error(`Failed to create session: ${error.message}`);
     }
 
+    console.log(`[DB-${dbCallId}] Session created successfully:`, {
+      id: data.id,
+      browserbase_session_id: data.browserbase_session_id
+    });
+    console.log(`[DB-${dbCallId}] <<<<< Returning from createSession\n`);
+    
     return data;
   }
 

@@ -79,7 +79,9 @@ export class BrowserbaseSessionManager {
         console.log(`Creating session without context for user ${userId}`);
       }
 
+      console.log(`[BROWSERBASE-${sessionCallId}] Creating Browserbase session...`);
       const browserbaseSession = await this.createBrowserbaseSession(sessionOptions);
+      console.log(`[BROWSERBASE-${sessionCallId}] Created Browserbase session:`, browserbaseSession.id);
 
       // Get the debug URLs from Browserbase API
       let liveViewUrl = '';
@@ -87,7 +89,7 @@ export class BrowserbaseSessionManager {
         const debugUrls = await this.getSessionDebugUrls(browserbaseSession.id);
         // Use the debuggerUrl which is suitable for embedding in iframes
         liveViewUrl = debugUrls.debuggerUrl;
-        console.log('Got debug URL from Browserbase:', liveViewUrl);
+        console.log(`[BROWSERBASE-${sessionCallId}] Got debug URL from Browserbase:`, liveViewUrl);
       } catch (error) {
         console.error('Failed to get debug URL, using fallback:', error);
         // Fallback to a constructed URL if the API call fails
@@ -95,6 +97,7 @@ export class BrowserbaseSessionManager {
       }
 
       // Create session record in our database with context info
+      console.log(`[BROWSERBASE-${sessionCallId}] Creating LinkedIn session in database...`);
       const linkedinSession = await this.sessionService.createSession(
         userId,
         browserbaseSession.id,
@@ -102,7 +105,12 @@ export class BrowserbaseSessionManager {
         config,
         contextId // Pass context ID to store in DB
       );
+      console.log(`[BROWSERBASE-${sessionCallId}] LinkedIn session created:`, {
+        id: linkedinSession.id,
+        browserbase_session_id: linkedinSession.browserbase_session_id
+      });
 
+      console.log(`[BROWSERBASE-${sessionCallId}] <<<< createUserSession returning session ${linkedinSession.browserbase_session_id}\n`);
       return linkedinSession;
     } catch (error) {
       console.error('Create user session error:', error);

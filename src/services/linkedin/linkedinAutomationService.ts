@@ -93,9 +93,21 @@ export class LinkedInAutomationService extends EventEmitter {
     userId: string,
     config: JobSearchConfig
   ): Promise<{ sessionId: string; debugUrl: string }> {
+    const startTime = Date.now();
+    const callId = Math.random().toString(36).substring(7);
+    console.log(`\n[SERVICE-${callId}] >>> startJobSearch called at ${new Date().toISOString()}`);
+    console.log(`[SERVICE-${callId}] User: ${userId}`);
+    console.log(`[SERVICE-${callId}] Config:`, JSON.stringify(config, null, 2));
+    
     try {
       // Use BrowserbaseSessionManager to create session with context
+      console.log(`[SERVICE-${callId}] Creating new session via browserbaseManager...`);
       const session = await this.browserbaseManager.createUserSession(userId, config);
+      console.log(`[SERVICE-${callId}] Session created:`, {
+        id: session.id,
+        browserbase_session_id: session.browserbase_session_id,
+        status: session.status
+      });
       
       console.log('Created Browserbase session with context:', {
         sessionId: session.browserbase_session_id,
@@ -197,12 +209,17 @@ export class LinkedInAutomationService extends EventEmitter {
         }
       });
 
-      return {
+      const result = {
         sessionId: session.browserbase_session_id,
         debugUrl: session.live_view_url || ''
       };
+      
+      console.log(`[SERVICE-${callId}] <<< startJobSearch returning:`, result);
+      console.log(`[SERVICE-${callId}] Total time: ${Date.now() - startTime}ms\n`);
+      
+      return result;
     } catch (error) {
-      console.error('Failed to start job search:', error);
+      console.error(`[SERVICE-${callId}] Failed to start job search:`, error);
       throw error;
     }
   }
