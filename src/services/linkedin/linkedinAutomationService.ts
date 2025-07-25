@@ -184,16 +184,24 @@ export class LinkedInAutomationService extends EventEmitter {
         
         console.log('Stagehand page is ready');
         
-        // Build the live view URL
-        const liveViewUrl = `https://www.browserbase.com/sessions/${sessionId}/live`;
-        console.log(`[SERVICE-${callId}] Live view URL:`, liveViewUrl);
+        // Get the debug URL for iframe embedding
+        let debugUrl = '';
+        try {
+          console.log(`[SERVICE-${callId}] Getting debug URLs for session ${sessionId}...`);
+          const debugUrls = await this.browserbaseManager.getSessionDebugUrls(sessionId);
+          debugUrl = debugUrls.debuggerFullscreenUrl || debugUrls.debuggerUrl || `https://www.browserbase.com/sessions/${sessionId}/live`;
+          console.log(`[SERVICE-${callId}] Debug URL:`, debugUrl);
+        } catch (error) {
+          console.warn('Failed to get debug URLs, using default live URL:', error);
+          debugUrl = `https://www.browserbase.com/sessions/${sessionId}/live`;
+        }
         
         // Save session to database
         console.log(`[SERVICE-${callId}] Creating LinkedIn session in database...`);
         const linkedinSession = await this.linkedinSessionService.createSession(
           userId,
           sessionId,
-          liveViewUrl,
+          debugUrl,
           config,
           contextId // Pass context ID to store in DB
         );
@@ -250,7 +258,7 @@ export class LinkedInAutomationService extends EventEmitter {
 
         const result = {
           sessionId: sessionId,
-          debugUrl: liveViewUrl
+          debugUrl: debugUrl
         };
         
         console.log(`[SERVICE-${callId}] <<< startJobSearch returning:`, result);
