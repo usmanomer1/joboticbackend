@@ -114,14 +114,9 @@ export class LinkedInAutomationService extends EventEmitter {
       
       // Initialize Stagehand with the existing session
       const stagehand = new Stagehand({
-        env: 'BROWSERBASE',
-        browserbaseApiKey: process.env.BROWSERBASE_API_KEY!,
-        projectId: process.env.BROWSERBASE_PROJECT_ID!,
-        browserbaseSessionID: session.browserbase_session_id, // Use existing session
-        verbose: this.config.verboseLogging ? 1 : 0,
-        modelName: 'openai/gpt-4o' as any,
-        openaiApiKey: process.env.OPENAI_API_KEY!,
-        domSettleTimeoutMs: 30000
+        browserbaseSessionId: session.browserbase_session_id, // Use existing session (note: lowercase 'd')
+        headless: false,
+        logger: this.config.verboseLogging ? { level: 'debug' } : undefined
       });
 
       try {
@@ -675,14 +670,9 @@ export class LinkedInAutomationService extends EventEmitter {
           // Initialize a new Stagehand instance with the existing session
           console.log('Attempting to reconnect with sessionId:', sessionId);
           stagehand = new Stagehand({
-            env: 'BROWSERBASE',
-            projectId: process.env.BROWSERBASE_PROJECT_ID!,
-            browserbaseApiKey: process.env.BROWSERBASE_API_KEY!,
-            browserbaseSessionID: sessionId, // Use capital ID for reconnecting to existing session
-            modelName: 'openai/gpt-4o' as any,
-            openaiApiKey: process.env.OPENAI_API_KEY!,
-            verbose: 1,
-            domSettleTimeoutMs: 30000 // Increase timeout for reconnection
+            browserbaseSessionId: sessionId, // Use lowercase 'd' as per working debug script
+            headless: false,
+            logger: { level: 'debug' }
           });
           
           await stagehand.init();
