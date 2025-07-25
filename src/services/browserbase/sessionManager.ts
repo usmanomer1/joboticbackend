@@ -81,8 +81,18 @@ export class BrowserbaseSessionManager {
 
       const browserbaseSession = await this.createBrowserbaseSession(sessionOptions);
 
-      // Generate live view URL
-      const liveViewUrl = `https://www.browserbase.com/sessions/${browserbaseSession.id}/live`;
+      // Get the debug URLs from Browserbase API
+      let liveViewUrl = '';
+      try {
+        const debugUrls = await this.client.sessions.debug(browserbaseSession.id);
+        // Use the debuggerUrl which is suitable for embedding in iframes
+        liveViewUrl = debugUrls.debuggerUrl;
+        console.log('Got debug URL from Browserbase:', liveViewUrl);
+      } catch (error) {
+        console.error('Failed to get debug URL, using fallback:', error);
+        // Fallback to a constructed URL if the API call fails
+        liveViewUrl = `https://www.browserbase.com/sessions/${browserbaseSession.id}/live`;
+      }
 
       // Create session record in our database with context info
       const linkedinSession = await this.sessionService.createSession(
