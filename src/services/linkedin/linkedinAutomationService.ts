@@ -100,45 +100,67 @@ export class LinkedInAutomationService extends EventEmitter {
     console.log(`[SERVICE-${callId}] Config:`, JSON.stringify(config, null, 2));
     
     try {
-      // Use BrowserbaseSessionManager to create session with context
-      console.log(`[SERVICE-${callId}] Creating new session via browserbaseManager...`);
-      const session = await this.browserbaseManager.createUserSession(userId, config);
-      console.log(`[SERVICE-${callId}] Session created:`, {
-        id: session.id,
-        browserbase_session_id: session.browserbase_session_id,
-        status: session.status
-      });
+      // Get or create context for the user
+      console.log(`[SERVICE-${callId}] Getting or creating context for user...`);
+      const contextId = await this.browserbaseManager.getOrCreateUserContext(userId);
       
-      console.log('Created Browserbase session with context:', {
-        sessionId: session.browserbase_session_id,
-        hasContext: !!session.browserbase_context_id,
-        contextId: session.browserbase_context_id
+      // Check if user has reached session limit
+      const activeCount = await this.linkedinSessionService.getActiveSessionsCount(userId);
+      if (activeCount >= 3) { // Max 3 active sessions
+        throw new AutomationError(
+          'Session limit reached. Please complete or terminate existing sessions.',
+          'SESSION_LIMIT_REACHED',
+          { userId, limit: 3, currentActive: activeCount }
+        );
+      }
+      
+      console.log(`[SERVICE-${callId}] Context status:`, {
+        hasContext: !!contextId,
+        contextId: contextId || 'none',
+        firstTimeUser: !contextId
       });
       
       // Check if first-time user (no context)
-      if (!session.browserbase_context_id) {
+      if (!contextId) {
         this.emit(AutomationEventType.CONTEXT_STATUS, { 
           requiresLogin: true, 
-          firstTime: true,
-          sessionId: session.browserbase_session_id
+          firstTime: true
         });
       }
       
-      // Initialize Stagehand with the existing session
+      // Let Stagehand create the session with context
+      console.log(`[SERVICE-${callId}] Initializing Stagehand to create session...`);
       const stagehand = new Stagehand({
-        browserbaseSessionId: session.browserbase_session_id, // Use existing session (note: lowercase 'd')
+        env: "BROWSERBASE",
+        apiKey: process.env.BROWSERBASE_API_KEY!,
+        projectId: process.env.BROWSERBASE_PROJECT_ID!,
+        browserbaseSessionCreateParams: {
+          projectId: process.env.BROWSERBASE_PROJECT_ID!,
+          proxies: true,
+          timeout: 3600, // 1 hour
+          browserSettings: contextId ? {
+            context: {
+              id: contextId,
+              persist: true
+            }
+          } : undefined
+        },
         headless: false,
         logger: this.config.verboseLogging ? { level: 'debug' } : undefined
       });
 
       try {
-        console.log('Initializing Stagehand with existing session:', {
-          sessionId: session.browserbase_session_id,
-          contextId: session.browserbase_context_id
-        });
-        
+        console.log('Initializing Stagehand with context configuration...');
         await stagehand.init();
         console.log('Stagehand initialized successfully');
+        
+        // Get the session ID from Stagehand
+        const sessionId = (stagehand as any).browserbaseSessionID || (stagehand as any).sessionId;
+        if (!sessionId) {
+          throw new Error('Failed to get session ID from Stagehand');
+        }
+        
+        console.log(`[SERVICE-${callId}] Stagehand created session:`, sessionId);
         
         // Ensure page is available after init
         let retries = 0;
@@ -153,7 +175,80 @@ export class LinkedInAutomationService extends EventEmitter {
         }
         
         console.log('Stagehand page is ready');
-        this.activeStagehand.set(session.browserbase_session_id, stagehand);
+        
+        // Build the live view URL
+        const liveViewUrl = `https://www.browserbase.com/sessions/${sessionId}/live`;
+        console.log(`[SERVICE-${callId}] Live view URL:`, liveViewUrl);
+        
+        // Save session to database
+        console.log(`[SERVICE-${callId}] Creating LinkedIn session in database...`);
+        const linkedinSession = await this.linkedinSessionService.createSession(
+          userId,
+          sessionId,
+          liveViewUrl,
+          config,
+          contextId // Pass context ID to store in DB
+        );
+        console.log(`[SERVICE-${callId}] LinkedIn session created:`, {
+          id: linkedinSession.id,
+          browserbase_session_id: linkedinSession.browserbase_session_id
+        });
+        
+        // Store Stagehand instance
+        this.activeStagehand.set(sessionId, stagehand);
+        
+        // Update the session reference for later use
+        const session = linkedinSession;
+
+        // Initialize progress tracking
+        const progress: AutomationProgress = {
+          totalJobs: 0,
+          processedJobs: 0,
+          appliedJobs: 0,
+          skippedJobs: 0,
+          failedJobs: 0,
+          currentPage: 1
+        };
+        this.sessionProgress.set(sessionId, progress);
+
+        // Initialize cache and metrics for this session
+        const cache = new JobDataCache(sessionId);
+        const metrics = new AutomationMetrics(sessionId);
+        
+        // Forward cache and metrics events
+        cache.on(AutomationEventType.CACHE_HIT, (data) => this.emit(AutomationEventType.CACHE_HIT, data));
+        cache.on(AutomationEventType.CACHE_MISS, (data) => this.emit(AutomationEventType.CACHE_MISS, data));
+        metrics.on(AutomationEventType.METRICS_UPDATED, (data) => this.emit(AutomationEventType.METRICS_UPDATED, data));
+        
+        this.jobCaches.set(sessionId, cache);
+        this.metricsCollectors.set(sessionId, metrics);
+
+        // Emit event
+        this.emit(AutomationEventType.SESSION_STARTED, {
+          sessionId: sessionId,
+          userId,
+          config,
+          debugUrl: liveViewUrl
+        });
+
+        // Start the automation process asynchronously
+        this.runAutomation(session, stagehand, config).catch(error => {
+          console.error('Automation process error:', error);
+          // Don't handle intervention errors as failures
+          if (error instanceof Error && !error.message.includes('Intervention required')) {
+            this.handleAutomationError(sessionId, error);
+          }
+        });
+
+        const result = {
+          sessionId: sessionId,
+          debugUrl: liveViewUrl
+        };
+        
+        console.log(`[SERVICE-${callId}] <<< startJobSearch returning:`, result);
+        console.log(`[SERVICE-${callId}] Total time: ${Date.now() - startTime}ms\n`);
+        
+        return result;
       } catch (initError: any) {
         console.error('Stagehand initialization error:', initError);
         console.error('Error details:', {
@@ -168,56 +263,6 @@ export class LinkedInAutomationService extends EventEmitter {
         }
         throw initError;
       }
-
-      // Initialize progress tracking
-      const progress: AutomationProgress = {
-        totalJobs: 0,
-        processedJobs: 0,
-        appliedJobs: 0,
-        skippedJobs: 0,
-        failedJobs: 0,
-        currentPage: 1
-      };
-      this.sessionProgress.set(session.browserbase_session_id, progress);
-
-      // Initialize cache and metrics for this session
-      const cache = new JobDataCache(session.browserbase_session_id);
-      const metrics = new AutomationMetrics(session.browserbase_session_id);
-      
-      // Forward cache and metrics events
-      cache.on(AutomationEventType.CACHE_HIT, (data) => this.emit(AutomationEventType.CACHE_HIT, data));
-      cache.on(AutomationEventType.CACHE_MISS, (data) => this.emit(AutomationEventType.CACHE_MISS, data));
-      metrics.on(AutomationEventType.METRICS_UPDATED, (data) => this.emit(AutomationEventType.METRICS_UPDATED, data));
-      
-      this.jobCaches.set(session.browserbase_session_id, cache);
-      this.metricsCollectors.set(session.browserbase_session_id, metrics);
-
-      // Emit event
-      this.emit(AutomationEventType.SESSION_STARTED, {
-        sessionId: session.browserbase_session_id,
-        userId,
-        config,
-        debugUrl: session.live_view_url
-      });
-
-      // Start the automation process asynchronously
-      this.runAutomation(session, stagehand, config).catch(error => {
-        console.error('Automation process error:', error);
-        // Don't handle intervention errors as failures
-        if (error instanceof Error && !error.message.includes('Intervention required')) {
-          this.handleAutomationError(session.browserbase_session_id, error);
-        }
-      });
-
-      const result = {
-        sessionId: session.browserbase_session_id,
-        debugUrl: session.live_view_url || ''
-      };
-      
-      console.log(`[SERVICE-${callId}] <<< startJobSearch returning:`, result);
-      console.log(`[SERVICE-${callId}] Total time: ${Date.now() - startTime}ms\n`);
-      
-      return result;
     } catch (error) {
       console.error(`[SERVICE-${callId}] Failed to start job search:`, error);
       throw error;
