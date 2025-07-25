@@ -2,7 +2,16 @@
 
 This is a focused job search and matching backend service. It provides job search functionality through JSearch API integration and AI-powered job matching using Google Gemini.
 
-Important: you are never supposed to run the development server with npm run dev. 
+# Project Memory – Development Guidelines
+
+## Forbidden Actions
+- **Never** run any dev server (e.g. `npm run dev`, `hugo server`, `rails server`, etc.)
+- Stop before any action that may start a server process
+
+## Git Workflow
+- After every task or change, always commit the changes
+- Use meaningful conventional commit messages (e.g. `feat:`, `fix:`, `chore:`)
+- Do **not** include any AI attribution or "co‑authored-by Claude" tags in commit messages  [oai_citation:2‡Reddit](https://www.reddit.com/r/ClaudeAI/comments/1kzxzkc/whats_up_with_claude_crediting_itself_in_commit/?utm_source=chatgpt.com)
 
 ## Core Functionality
 
@@ -11,136 +20,135 @@ This service focuses exclusively on:
 - AI-powered job-to-resume matching
 - Salary estimation
 - Job details retrieval
+- LinkedIn job automation using Stagehand and Browserbase
 
 **Note**: Resume generation and editing functionality has been moved to a separate Python service.
 
-## API Endpoints
+## Project Identifiers
+- Supabase Project ID: wqyquvgduwjkyadkumkl
 
-### Jobs
-- `POST /api/jobs/match` - Search jobs and get AI match scores
-- `POST /api/jobs/search` - Basic job search without matching
-- `GET /api/jobs/:jobId` - Get detailed job information
-- `POST /api/jobs/salary-estimate` - Get salary estimate for a position
-- `GET /api/jobs/trending` - Get trending job searches
+## Stagehand Project Rules
 
-## JSearch API Endpoints Used
+This is a project that uses Stagehand, which amplifies Playwright with `act`, `extract`, and `observe` added to the Page class.
 
-- **Search Jobs**: GET /search - Search across 20+ job boards
-  - Parameters: query, page, num_pages, date_posted, remote_jobs_only, employment_types, job_requirements
-- **Job Details**: GET /job-details - Get complete job information
-  - Parameters: job_id, country
-- **Salary Estimate**: GET /estimated-salary - Get salary data
-  - Parameters: job_title, location, location_type
-- **Company Salary**: GET /company-job-salary - Get company-specific salary data
-  - Parameters: company, job_title, location_type
+`Stagehand` is a class that provides config, a `StagehandPage` object via `stagehand.page`, and a `StagehandContext` object via `stagehand.context`.
 
-## Data Flow
+`Page` is a class that extends the Playwright `Page` class and adds `act`, `extract`, and `observe` methods.
+`Context` is a class that extends the Playwright `BrowserContext` class.
 
-1. Client sends search preferences (job title, location, filters) + resume text
-2. Backend constructs search query and calls JSearch API (with caching)
-3. Enriches results with salary data when available
-4. AI service scores each job against resume (in batches of 10)
-5. Results sorted by match score with match reasons
-6. Returns matched jobs with scores and missing skills
+Use the following rules to write code for this project.
 
-## API Request/Response Examples
+### Observe
 
-### Job Search Request
-```json
-POST /api/jobs/search
-{
-  "query": "software engineer Chicago",
-  "jobTitle": "software engineer",
-  "location": "Chicago, IL",
-  "datePosted": "week",
-  "remote": false,
-  "employmentTypes": ["FULLTIME"],
-  "page": 1
-}
+To plan an instruction like "click the sign in button", use Stagehand `observe` to get the action to execute.
+
+```typescript
+const results = await page.observe("Click the sign in button");
 ```
 
-### Job Match Request
-```json
-POST /api/jobs/match
-{
-  "resumeText": "Full resume text here...",
-  "jobTitle": "software engineer",
-  "location": "Chicago, IL",
-  "datePosted": "week",
-  "limit": 10
-}
+You can also pass in the following params:
+
+```typescript
+await page.observe({
+  instruction: the instruction to execute,
+  onlyVisible: false, // DEFAULT: Returns better results and less tokens, but uses Chrome a11y tree so may not always target directly visible elements
+  returnAction: true, // DEFAULT: return the action to execute
+});
 ```
 
-### Job Match Response
-```json
-{
-  "success": true,
-  "data": {
-    "jobs": [{
-      "job_id": "xyz123",
-      "employer_name": "Tech Corp",
-      "job_title": "Senior Software Engineer",
-      "job_apply_link": "https://...",
-      "match_score": 85,
-      "match_label": "STRONG MATCH",
-      "match_reasons": ["5+ years experience matches", "Python skills align"],
-      "missing_skills": ["Kubernetes", "AWS"],
-      // ... other JSearch fields
-    }],
-    "totalFound": 45,
-    "currentPage": 1
+The result of `observe` is an array of `ObserveResult` objects that can directly be used as params for `act` like this:
+```typescript
+const results = await page.observe({
+  instruction: the instruction to execute,
+  onlyVisible: false, // Returns better results and less tokens, but uses Chrome a11y tree so may not always target directly visible elements
+  returnAction: true, // return the action to execute
+});
+await page.act(results[0]);
+```
+
+### Extract
+
+When writing code that needs to extract data from the page, use Stagehand `extract`. Explicitly pass the following params by default:
+
+```typescript
+const { someValue } = await page.extract({
+  instruction: the instruction to execute,
+  schema: z.object({
+    someValue: z.string(),
+  }), // The schema to extract
+  useTextExtract: true, // Set true for better results on larger extractions (sentences, paragraphs, etc), or set false for small extractions (name, birthday, etc)
+});
+```
+
+### Initialize
+
+```typescript
+import { Stagehand } from "@browserbasehq/stagehand";
+import StagehandConfig from "./stagehand.config";
+
+const stagehand = new Stagehand(StagehandConfig);
+await stagehand.init();
+
+const page = stagehand.page; // Playwright Page with act, extract, and observe methods
+const context = stagehand.context; // Playwright BrowserContext
+```
+
+### Act
+
+You can cache the results of `observe` and use them as params for `act` like this:
+
+```typescript
+const instruction = "Click the sign in button";
+const cachedAction = await getCache(instruction);
+
+if (cachedAction) {
+  await page.act(cachedAction);
+} else {
+  try {
+    const results = await page.observe(instruction);
+    await setCache(instruction, results);
+    await page.act(results[0]);
+  } catch (error) {
+    await page.act(instruction); // If the action is not cached, execute the instruction directly
   }
 }
 ```
 
-## Caching Strategy
+Be sure to cache the results of `observe` and use them as params for `act` to avoid unexpected DOM changes. Using `act` without caching will result in more unpredictable behavior.
 
-- Job search results: Cached for 2 hours (configurable via CACHE_TTL)
-- Job details: Cached for 24 hours
-- Salary estimates: Cached for 7 days
+Act `action` should be as atomic and specific as possible, i.e. "Click the sign in button" or "Type 'hello' into the search input".
+AVOID actions that are more than one step, i.e. "Order me pizza" or "Send an email to Paul asking him to call me".
 
-## Rate Limiting
+### Extract (Additional Examples)
 
-- General endpoints: 100 requests per 15 minutes
-- AI matching endpoints: 20 requests per 15 minutes
+If you are writing code that needs to extract data from the page, use Stagehand `extract`.
 
-## Environment Variables
-
-Required:
-- `RAPIDAPI_KEY` - For JSearch API access
-- `GEMINI_API_KEY` - For AI matching
-- `API_KEY` - For API authentication
-
-Optional:
-- `PORT` - Server port (default: 3001)
-- `CACHE_TTL` - Cache duration in seconds (default: 7200)
-- `NODE_ENV` - Environment mode
-- `FRONTEND_URL` - Allowed frontend origin
-
-## Development Guidelines
-
-1. All job data comes from JSearch API - do not store job data locally
-2. Use caching to minimize API calls and costs
-3. Batch AI requests when possible (current batch size: 10)
-4. Always return match scores and reasons for transparency
-5. Handle API errors gracefully with fallbacks
-
-## Error Handling
-
-- JSearch API errors: Return cached results if available
-- AI service errors: Return jobs without match scores
-- Rate limit errors: Return 429 with retry-after header
-
-## Testing
-
-Test the API with:
-```bash
-curl -X POST http://localhost:3001/api/jobs/search \
-  -H "X-API-Key: your-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "software engineer",
-    "location": "San Francisco, CA",
-    "limit": 5
-  }'
+```typescript
+const signInButtonText = await page.extract("extract the sign in button text");
 ```
+
+You can also pass in params like an output schema in Zod, and a flag to use text extraction:
+
+```typescript
+const data = await page.extract({
+  instruction: "extract the sign in button text",
+  schema: z.object({
+    text: z.string(),
+  }),
+  useTextExtract: true, // Set true for larger-scale extractions (multiple paragraphs), or set false for small extractions (name, birthday, etc)
+});
+```
+
+`schema` is a Zod schema that describes the data you want to extract. To extract an array, make sure to pass in a single object that contains the array, as follows:
+
+```typescript
+const data = await page.extract({
+  instruction: "extract the text inside all buttons",
+  schema: z.object({
+    text: z.array(z.string()),
+  }),
+  useTextExtract: true, // Set true for larger-scale extractions (multiple paragraphs), or set false for small extractions (name, birthday, etc)
+});
+```
+
+[... rest of the existing content remains unchanged ...]
