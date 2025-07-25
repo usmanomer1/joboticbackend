@@ -87,17 +87,23 @@ export class BrowserbaseSessionManager {
       const browserbaseSession = await this.createBrowserbaseSession(sessionOptions);
       console.log(`[BROWSERBASE-${sessionCallId}] Created Browserbase session:`, browserbaseSession.id);
 
-      // Get the debug URLs from Browserbase API
+      // Get the live view URL for iframe embedding
       let liveViewUrl = '';
+      
+      // For iframe embedding, we should use the live session URL, not the debug inspector
+      // The debug inspector URL creates a separate viewer session
+      liveViewUrl = `https://www.browserbase.com/sessions/${browserbaseSession.id}/live`;
+      console.log(`[BROWSERBASE-${sessionCallId}] Using live view URL:`, liveViewUrl);
+      
+      // Optionally, we can still get debug URLs for logging purposes
       try {
         const debugUrls = await this.getSessionDebugUrls(browserbaseSession.id);
-        // Use the debuggerUrl which is suitable for embedding in iframes
-        liveViewUrl = debugUrls.debuggerUrl;
-        console.log(`[BROWSERBASE-${sessionCallId}] Got debug URL from Browserbase:`, liveViewUrl);
+        console.log(`[BROWSERBASE-${sessionCallId}] Debug URLs available:`, {
+          debuggerUrl: debugUrls.debuggerUrl,
+          debuggerFullscreenUrl: debugUrls.debuggerFullscreenUrl
+        });
       } catch (error) {
-        console.error('Failed to get debug URL, using fallback:', error);
-        // Fallback to a constructed URL if the API call fails
-        liveViewUrl = `https://www.browserbase.com/sessions/${browserbaseSession.id}/live`;
+        console.warn('Failed to get debug URLs (non-critical):', error);
       }
 
       // Create session record in our database with context info
