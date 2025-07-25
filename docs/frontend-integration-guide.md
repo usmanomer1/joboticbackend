@@ -38,8 +38,11 @@ const searchConfig = {
 
 The backend will:
 1. Pass the entire `searchPrompt` directly to LinkedIn's search bar
-2. LinkedIn's smart search handles the parsing
-3. No complex NLP needed on our end!
+2. Automatically append filter keywords if not already present:
+   - Adds "remote" if `remote: true` and not in search prompt
+   - Adds "easy apply" if `easyApplyOnly: true` and not in search prompt
+3. LinkedIn's smart search handles the parsing
+4. Additional UI filters are applied for: Date Posted, Company filters, etc.
 
 ### Search Configuration
 
@@ -317,7 +320,9 @@ const startAutomation = async (prompt: string) => {
     },
     body: JSON.stringify({
       searchPrompt: prompt,  // Direct natural language!
-      easyApplyOnly: true,
+      easyApplyOnly: true,   // Will add "easy apply" to search if not present
+      remote: true,          // Will add "remote" to search if not present
+      datePosted: "week",    // Applied via UI filter
       maxApplications: 50,
       resumeId: selectedResumeId
     })
@@ -525,14 +530,39 @@ ws.on('intervention:required', (data) => {
 ws.connect(sessionId);
 ```
 
+## Important Updates (Latest)
+
+### Filter Handling
+- **"remote" and "easy apply"** keywords are automatically added to search query
+- Backend checks if keywords already exist before adding them
+- Other filters (Date Posted, Company, etc.) are still applied via UI
+
+### Intervention Deduplication
+- Backend now prevents duplicate intervention events (5-second cooldown)
+- You should only receive one intervention event per type per session
+- Still recommended to implement frontend deduplication as backup
+
+### Example with Filters
+```typescript
+// If user types: "software engineer vancouver"
+// And you have: remote: true, easyApplyOnly: true
+// Backend creates: "software engineer vancouver remote easy apply"
+
+// If user already typed: "software engineer remote vancouver"
+// And you have: remote: true
+// Backend doesn't add "remote" again
+```
+
 ## Best Practices
 
 1. **Always use natural language prompts** - Let LinkedIn do the parsing
-2. **Handle interventions gracefully** - Show clear instructions to users
-3. **Update UI in real-time** - Use WebSocket events for smooth experience
-4. **Cache context status** - Don't check on every request
-5. **Show agent reasoning** - Users love seeing the AI think
-6. **Handle errors properly** - Network issues, auth failures, etc.
+2. **Include filter preferences** - Backend intelligently adds keywords
+3. **Handle interventions gracefully** - Show clear instructions to users
+4. **Implement defensive deduplication** - Even though backend handles it
+5. **Update UI in real-time** - Use WebSocket events for smooth experience
+6. **Cache context status** - Don't check on every request
+7. **Show agent reasoning** - Users love seeing the AI think
+8. **Handle errors properly** - Network issues, auth failures, etc.
 
 ## Support & Troubleshooting
 
