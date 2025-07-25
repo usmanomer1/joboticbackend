@@ -223,6 +223,14 @@ export class LinkedInAutomationController {
    * Start a new LinkedIn automation session
    */
   async startAutomation(req: Request, res: Response): Promise<void> {
+    const requestId = (req as any).requestId || 'unknown';
+    console.log(`\n[${requestId}] ==> START AUTOMATION REQUEST at ${new Date().toISOString()}`);
+    console.log(`[${requestId}] Request headers:`, {
+      'user-agent': req.headers['user-agent'],
+      'x-request-id': req.headers['x-request-id'],
+      'referer': req.headers['referer']
+    });
+    
     try {
       // Validate request body
       const validation = startAutomationSchema.safeParse(req.body);
@@ -275,24 +283,31 @@ export class LinkedInAutomationController {
       }
 
       // Start automation
+      console.log(`[${requestId}] Calling automationService.startJobSearch for user ${userId}`);
       const { sessionId, debugUrl } = await this.automationService.startJobSearch(
         userId,
         jobSearchConfig
       );
+      console.log(`[${requestId}] automationService returned sessionId: ${sessionId}`);
 
       // Generate task ID for Browser Use compatibility
       const taskId = `task_${uuidv4()}`;
       this.sessionTaskMap.set(sessionId, taskId);
 
       // Return Browser Use compatible response
-      res.status(200).json({
+      const response = {
         sessionId, // This is the actual Browserbase session ID
         liveViewUrl: debugUrl,
         status: 'running',
         taskId,
         // Also include for backward compatibility
         browserbaseSessionId: sessionId
-      });
+      };
+      
+      console.log(`[${requestId}] <== RETURNING RESPONSE:`, response);
+      console.log(`[${requestId}] ==> END AUTOMATION REQUEST at ${new Date().toISOString()}\n`);
+      
+      res.status(200).json(response);
 
     } catch (error) {
       console.error('Start automation error:', error);
