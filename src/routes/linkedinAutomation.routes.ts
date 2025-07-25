@@ -54,4 +54,9 @@ router.delete('/stop/:sessionId', controller.stopAutomation.bind(controller));
 router.post('/continue/:sessionId', controller.continueAfterIntervention.bind(controller));
 router.post('/upload', controller.uploadFile.bind(controller));
 
+// Context management routes
+router.get('/context-status', controller.getContextStatus.bind(controller));
+router.post('/setup-context', controller.setupContext.bind(controller));
+router.delete('/reset-context', controller.resetContext.bind(controller));
+
 export default router;

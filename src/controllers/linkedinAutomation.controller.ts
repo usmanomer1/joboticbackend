@@ -855,6 +855,59 @@ export class LinkedInAutomationController {
   }
 
   /**
+   * GET /api/automation/linkedin/context-status
+   * Check if user has a persistent context for LinkedIn sessions
+   */
+  async getContextStatus(req: Request, res: Response): Promise<void> {
+    try {
+      const authHeader = req.headers.authorization;
+      const userId = (req as any).user?.id;
+
+      if (!userId) {
+        res.status(401).json({
+          error: 'Unauthorized',
+          message: 'User not authenticated'
+        });
+        return;
+      }
+
+      // Get user's context status
+      const contextId = await this.linkedinSessionService.getUserContext(userId);
+      
+      // Get last session info to determine when context was last used
+      let lastUsed: Date | null = null;
+      if (contextId) {
+        try {
+          const lastSession = await this.linkedinSessionService.getLastSessionForUser(userId);
+          if (lastSession) {
+            lastUsed = lastSession.created_at;
+          }
+        } catch (error) {
+          console.error('Error getting last session:', error);
+        }
+      }
+
+      res.status(200).json({
+        hasContext: !!contextId,
+        contextId: contextId || undefined,
+        requiresLogin: !contextId,
+        lastUsed: lastUsed ? lastUsed.toISOString() : undefined,
+        message: contextId 
+          ? 'You have a saved LinkedIn session. No login required.'
+          : 'First-time users need to log in to LinkedIn once.'
+      });
+
+    } catch (error) {
+      console.error('Get context status error:', error);
+      res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Failed to get context status',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  }
+
+  /**
    * Log API calls to Supabase
    */
   private async logApiCall(userId: string, action: string, details: any): Promise<void> {

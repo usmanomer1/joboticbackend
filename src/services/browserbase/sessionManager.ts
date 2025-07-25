@@ -57,6 +57,12 @@ export class BrowserbaseSessionManager {
       // Get or create a context for this user
       let contextId = await this.getOrCreateUserContext(userId);
       const useContext = config.useContext !== false; // Default to true
+      
+      // If no context exists and useContext is enabled, create one
+      if (!contextId && useContext) {
+        console.log(`Creating new context for user ${userId}`);
+        contextId = await this.createUserContext(userId);
+      }
 
       // Create Browserbase session with optional context
       const sessionOptions: any = {
@@ -68,7 +74,9 @@ export class BrowserbaseSessionManager {
       if (useContext && contextId) {
         sessionOptions.contextId = contextId;
         sessionOptions.persist = true;
-        console.log(`Creating session with existing context for user ${userId}`);
+        console.log(`Creating session with context for user ${userId}, contextId: ${contextId}`);
+      } else {
+        console.log(`Creating session without context for user ${userId}`);
       }
 
       const browserbaseSession = await this.createBrowserbaseSession(sessionOptions);

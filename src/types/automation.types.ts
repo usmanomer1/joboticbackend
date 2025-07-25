@@ -46,7 +46,37 @@ export enum AutomationEventType {
   SESSION_COMPLETED = 'session:completed',
   PROGRESS_UPDATED = 'progress:updated',
   INTERVENTION_REQUIRED = 'intervention:required',
-  ERROR = 'error'
+  ERROR = 'error',
+  
+  // Context events
+  CONTEXT_STATUS = 'context:status',
+  FIRST_TIME_LOGIN = 'context:first_login',
+  CONTEXT_CREATED = 'context:created',
+  
+  // Action events
+  ACTION_PERFORMED = 'action:performed',
+  AGENT_STEP = 'agent:step',
+  AGENT_STEP_REALTIME = 'agent:step:realtime',
+  AGENT_REASONING = 'agent:reasoning',
+  AGENT_COMPLETE = 'agent:complete',
+  EXTRACTION_RESULT = 'extraction:result',
+  DECISION_MADE = 'decision:made',
+  
+  // Application events
+  JOB_FOUND = 'job:found',
+  JOB_SKIPPED = 'job:skipped',
+  APPLICATION_STARTED = 'application:started',
+  APPLICATION_SAVED = 'application:saved',
+  FORM_FIELD_FILLED = 'form:field_filled',
+  APPLICATION_SUBMITTED = 'application:submitted',
+  EXTERNAL_SITE_DETECTED = 'external:detected',
+  
+  // Cache events
+  CACHE_HIT = 'cache:hit',
+  CACHE_MISS = 'cache:miss',
+  
+  // Metrics events
+  METRICS_UPDATED = 'metrics:updated'
 }
 
 export interface JobSearchConfig {
