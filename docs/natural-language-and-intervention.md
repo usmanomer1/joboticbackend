@@ -52,7 +52,7 @@
 
 ### Endpoint:
 ```
-PUT /api/linkedin/resume/:sessionId
+POST /api/linkedin/continue/:sessionId
 ```
 
 ### Flow:
@@ -62,7 +62,7 @@ PUT /api/linkedin/resume/:sessionId
 4. **User completes action** in the iframe
 5. **Frontend calls resume endpoint**:
    ```javascript
-   PUT /api/linkedin/resume/session-123
+   POST /api/linkedin/continue/session-123
    ```
 6. **Backend resumes automation** from where it left off
 
