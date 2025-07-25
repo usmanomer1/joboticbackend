@@ -102,10 +102,12 @@ Body: {
   // Natural language approach (recommended)
   searchPrompt: "software engineer vancouver bc",
   
-  // Optional filters
-  easyApplyOnly: true,
+  // Optional filters - only include if user selected them
+  // easyApplyOnly: true,  // Uncomment if user wants Easy Apply only
+  // remote: true,         // Uncomment if user wants remote jobs
+  // datePosted: "week",   // Uncomment if user selected date filter
+  
   maxApplications: 50,
-  datePosted: "week",
   
   // Resume info
   resumeId: "uuid-here",  // From your resume service
@@ -311,7 +313,7 @@ if (!contextStatus.hasContext) {
 ### 2. Start Automation
 ```typescript
 // User enters: "software engineer vancouver bc"
-const startAutomation = async (prompt: string) => {
+const startAutomation = async (prompt: string, filters?: any) => {
   const response = await fetch('/api/linkedin/start-job-search', {
     method: 'POST',
     headers: {
@@ -320,10 +322,11 @@ const startAutomation = async (prompt: string) => {
     },
     body: JSON.stringify({
       searchPrompt: prompt,  // Direct natural language!
-      easyApplyOnly: true,   // Will add "easy apply" to search if not present
-      remote: true,          // Will add "remote" to search if not present
-      datePosted: "week",    // Applied via UI filter
-      maxApplications: 50,
+      // Optional filters - only send if user selected them
+      ...(filters?.easyApplyOnly && { easyApplyOnly: true }),   // Only adds "easy apply" if user wants it
+      ...(filters?.remote && { remote: true }),                  // Only adds "remote" if user wants it
+      ...(filters?.datePosted && { datePosted: filters.datePosted }), // Only applied if user selects
+      maxApplications: filters?.maxApplications || 50,
       resumeId: selectedResumeId
     })
   });
@@ -337,6 +340,17 @@ const startAutomation = async (prompt: string) => {
   // Start listening to WebSocket events
   subscribeToEvents(data.sessionId);
 };
+
+// Example usage:
+// Just the search prompt - no filters
+startAutomation("software engineer vancouver bc");
+
+// With filters the user selected
+startAutomation("software engineer vancouver bc", {
+  easyApplyOnly: true,
+  remote: true,
+  datePosted: "week"
+});
 ```
 
 ### 3. Handle Real-time Updates
@@ -533,9 +547,11 @@ ws.connect(sessionId);
 ## Important Updates (Latest)
 
 ### Filter Handling
-- **"remote" and "easy apply"** keywords are automatically added to search query
-- Backend checks if keywords already exist before adding them
-- Other filters (Date Posted, Company, etc.) are still applied via UI
+- Filters are **OPTIONAL** - only applied if user explicitly selects them
+- **"remote" and "easy apply"** keywords are added to search query ONLY if:
+  - User sets `remote: true` or `easyApplyOnly: true`
+  - AND the keywords aren't already in the search prompt
+- Other filters (Date Posted, Company, etc.) are applied via UI when specified
 
 ### Intervention Deduplication
 - Backend now prevents duplicate intervention events (5-second cooldown)
@@ -544,19 +560,28 @@ ws.connect(sessionId);
 
 ### Example with Filters
 ```typescript
-// If user types: "software engineer vancouver"
-// And you have: remote: true, easyApplyOnly: true
+// Example 1: No filters
+// User types: "software engineer vancouver"
+// Frontend sends: { searchPrompt: "software engineer vancouver" }
+// Backend searches: "software engineer vancouver" (no changes)
+
+// Example 2: User selects filters
+// User types: "software engineer vancouver"
+// User selects: Remote checkbox, Easy Apply checkbox
+// Frontend sends: { searchPrompt: "software engineer vancouver", remote: true, easyApplyOnly: true }
 // Backend creates: "software engineer vancouver remote easy apply"
 
-// If user already typed: "software engineer remote vancouver"
-// And you have: remote: true
-// Backend doesn't add "remote" again
+// Example 3: Keywords already in prompt
+// User types: "remote software engineer vancouver"
+// User selects: Remote checkbox
+// Frontend sends: { searchPrompt: "remote software engineer vancouver", remote: true }
+// Backend searches: "remote software engineer vancouver" (doesn't duplicate "remote")
 ```
 
 ## Best Practices
 
 1. **Always use natural language prompts** - Let LinkedIn do the parsing
-2. **Include filter preferences** - Backend intelligently adds keywords
+2. **Only send filters user selected** - Don't apply filters by default
 3. **Handle interventions gracefully** - Show clear instructions to users
 4. **Implement defensive deduplication** - Even though backend handles it
 5. **Update UI in real-time** - Use WebSocket events for smooth experience
