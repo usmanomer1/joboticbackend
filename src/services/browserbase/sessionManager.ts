@@ -40,6 +40,7 @@ export class BrowserbaseSessionManager {
 
   /**
    * Create a new browser session for a user
+   * @deprecated Use Stagehand's session creation with browserbaseSessionCreateParams instead
    */
   async createUserSession(userId: string, config: JobSearchConfig): Promise<LinkedInSession> {
     const sessionCallId = Math.random().toString(36).substring(7);
