@@ -160,6 +160,14 @@ export class LinkedInAutomationService extends EventEmitter {
           throw new Error('Failed to get session ID from Stagehand');
         }
         
+        // Log Stagehand properties for debugging
+        console.log('Stagehand properties:', {
+          hasPage: !!stagehand.page,
+          hasContext: !!(stagehand as any).context,
+          sessionId: sessionId,
+          browserbaseSessionID: (stagehand as any).browserbaseSessionID
+        });
+        
         console.log(`[SERVICE-${callId}] Stagehand created session:`, sessionId);
         
         // Ensure page is available after init

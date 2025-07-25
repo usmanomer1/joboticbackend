@@ -203,8 +203,50 @@ export class HybridJobSearchFlow extends EventEmitter {
       timestamp: new Date()
     });
 
-    await this.performCachedAction('Navigate to LinkedIn Jobs page');
-    await this.stagehand.page.waitForTimeout(3000);
+    // Navigate directly to LinkedIn Jobs URL
+    try {
+      console.log('Navigating to LinkedIn Jobs URL...');
+      await this.stagehand.page.goto('https://www.linkedin.com/jobs/', {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000
+      });
+      console.log('Successfully navigated to LinkedIn Jobs');
+      await this.stagehand.page.waitForTimeout(3000);
+      
+      // Check if we need to log in
+      const currentUrl = await this.stagehand.page.url();
+      console.log('Current URL after navigation:', currentUrl);
+      
+      if (currentUrl.includes('/login') || currentUrl.includes('authwall')) {
+        console.log('Login required - emitting intervention event');
+        
+        // Emit intervention required event
+        this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
+          sessionId: this.session.browserbase_session_id,
+          intervention: {
+            type: 'login',
+            confidence: 1.0,
+            message: 'LinkedIn login required',
+            instructions: 'Please log in to your LinkedIn account to continue the automation.',
+            url: currentUrl,
+            liveViewUrl: this.session.live_view_url
+          }
+        });
+        
+        // Update session status
+        await this.linkedinSessionService.updateSessionStatus(
+          this.session.id,
+          'intervention_required',
+          null
+        );
+        
+        // Throw error to stop the flow
+        throw new Error('Intervention required: LinkedIn login needed');
+      }
+    } catch (error) {
+      console.error('Failed to navigate to LinkedIn Jobs:', error);
+      throw error;
+    }
   }
 
   /**
