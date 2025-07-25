@@ -692,8 +692,10 @@ export class LinkedInAutomationService extends EventEmitter {
         
         console.log('Login monitor check - URL:', currentUrl);
         
-        // Check if we're logged in
-        if (currentUrl.includes('/feed/') || currentUrl.includes('/jobs/')) {
+        // Check if we're logged in by looking at URL and checking for job search elements
+        if (currentUrl.includes('/feed/') || 
+            currentUrl.includes('/jobs/search') || 
+            (currentUrl.includes('/jobs/') && !currentUrl.includes('authwall'))) {
           console.log('Login detected! User is now on:', currentUrl);
           
           // Clear the monitor
