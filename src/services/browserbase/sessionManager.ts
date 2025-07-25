@@ -24,7 +24,7 @@ export class BrowserbaseSessionManager {
   private sessionService: LinkedInSessionService;
   private apiKey: string;
   private projectId: string;
-  private baseUrl = 'https://www.browserbase.com/v1';
+  private baseUrl = 'https://api.browserbase.com/v1';
   private maxActiveSessions = 3; // Configurable limit
   private userContextMap = new Map<string, string>(); // userId -> contextId mapping
 
@@ -84,7 +84,7 @@ export class BrowserbaseSessionManager {
       // Get the debug URLs from Browserbase API
       let liveViewUrl = '';
       try {
-        const debugUrls = await this.client.sessions.debug(browserbaseSession.id);
+        const debugUrls = await this.getBrowserbaseDebugUrl(browserbaseSession.id);
         // Use the debuggerUrl which is suitable for embedding in iframes
         liveViewUrl = debugUrls.debuggerUrl;
         console.log('Got debug URL from Browserbase:', liveViewUrl);
