@@ -20,6 +20,9 @@ The backend provides a comprehensive LinkedIn job automation service with:
 - Intervention handling for manual actions
 - Rich event streaming for UI updates
 
+### Live View URL
+The `liveViewUrl` returned in API responses is a Browserbase debug URL that can be embedded in an iframe to show the live browser session. This URL is obtained via the Browserbase API and provides real-time visibility into the automation process.
+
 ## Natural Language Prompts
 
 **YES! We fully support natural language prompts.** The backend is designed to handle both structured and natural language searches.
@@ -127,7 +130,7 @@ Body: {
 
 Response: {
   sessionId: string;             // Browserbase session ID
-  liveViewUrl: string;           // For iframe embedding
+  liveViewUrl: string;           // Browserbase debug URL for iframe embedding
   status: 'running';
   taskId: string;                // For Browser Use compatibility
   browserbaseSessionId: string;  // Same as sessionId
