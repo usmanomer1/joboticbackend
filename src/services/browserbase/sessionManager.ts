@@ -42,6 +42,10 @@ export class BrowserbaseSessionManager {
    * Create a new browser session for a user
    */
   async createUserSession(userId: string, config: JobSearchConfig): Promise<LinkedInSession> {
+    const sessionCallId = Math.random().toString(36).substring(7);
+    console.log(`\n[BROWSERBASE-${sessionCallId}] >>>> createUserSession called at ${new Date().toISOString()}`);
+    console.log(`[BROWSERBASE-${sessionCallId}] User: ${userId}`);
+    
     try {
       // Check if user has reached session limit
       const activeCount = await this.sessionService.getActiveSessionsCount(userId);
