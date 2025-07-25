@@ -891,7 +891,7 @@ export class LinkedInAutomationController {
         hasContext: !!contextId,
         contextId: contextId || undefined,
         requiresLogin: !contextId,
-        lastUsed: lastUsed ? lastUsed.toISOString() : undefined,
+        lastUsed: lastUsed ? (lastUsed instanceof Date ? lastUsed.toISOString() : lastUsed) : undefined,
         message: contextId 
           ? 'You have a saved LinkedIn session. No login required.'
           : 'First-time users need to log in to LinkedIn once.'
