@@ -244,7 +244,7 @@ export class LinkedInAutomationService extends EventEmitter {
           sessionId: sessionId,
           userId,
           config,
-          debugUrl: liveViewUrl
+          debugUrl: debugUrl
         });
 
         // Start the automation process asynchronously
