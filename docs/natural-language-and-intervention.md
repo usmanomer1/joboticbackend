@@ -6,21 +6,31 @@
 
 ### How it works:
 1. Frontend sends `searchPrompt` field with natural language query
-2. Backend passes it directly to LinkedIn's search bar
-3. LinkedIn's smart search handles all parsing and interpretation
+2. Backend intelligently adds filter keywords if not present:
+   - Appends "remote" if `remote: true` and not in prompt
+   - Appends "easy apply" if `easyApplyOnly: true` and not in prompt
+3. Backend passes the enhanced query to LinkedIn's search bar
+4. LinkedIn's smart search handles all parsing and interpretation
+5. Additional filters (Date Posted, etc.) are applied via UI buttons
 
 ### Example:
 ```javascript
 // Frontend sends:
 {
-  searchPrompt: "software engineer vancouver bc with 5 years experience $150k+ remote"
+  searchPrompt: "software engineer vancouver bc",
+  remote: true,
+  easyApplyOnly: true
 }
 
-// Backend code (hybridJobSearchFlow.ts:214):
-const searchQuery = this.config.searchPrompt || 
-                   `${this.config.jobTitle} ${this.config.location}`.trim();
+// Backend enhances it:
+let searchQuery = "software engineer vancouver bc";
+// Adds "remote" because remote: true
+searchQuery += " remote";
+// Adds "easy apply" because easyApplyOnly: true  
+searchQuery += " easy apply";
+// Final: "software engineer vancouver bc remote easy apply"
 
-// Then types it directly into LinkedIn search:
+// Then types it into LinkedIn search:
 await this.stagehand.page.act(`Type "${searchQuery}" in the search field`);
 ```
 
@@ -56,25 +66,44 @@ PUT /api/linkedin/resume/:sessionId
 
 ## Key Implementation Details
 
-### Search Query Priority:
-```typescript
-// In JobSearchConfig interface:
-searchPrompt?: string;      // Primary - natural language
-jobTitle?: string;          // Fallback if no searchPrompt
-location?: string;          // Fallback if no searchPrompt
-```
-
-### The Magic Line:
+### Search Query Building:
 ```typescript
 // hybridJobSearchFlow.ts - performSearch()
-const searchQuery = this.config.searchPrompt || 
-                   `${this.config.jobTitle} ${this.config.location}`.trim();
+// Build search query with filters included
+let searchQuery = this.config.searchPrompt || 
+                  `${this.config.jobTitle} ${this.config.location}`.trim();
+
+// Add filter keywords directly to search query if not already included
+if (this.config.remote && !searchQuery.toLowerCase().includes('remote')) {
+  searchQuery += ' remote';
+}
+
+if (this.config.easyApplyOnly && !searchQuery.toLowerCase().includes('easy apply')) {
+  searchQuery += ' easy apply';
+}
 ```
 
-This means:
-- If `searchPrompt` is provided → use it directly
-- If not → fall back to combining jobTitle + location
-- Either way → LinkedIn handles the interpretation
+### Intervention Deduplication:
+```typescript
+// linkedinAutomationService.ts
+private interventionCache = new Map<string, number>();
+private readonly INTERVENTION_COOLDOWN = 5000; // 5 seconds
+
+private emitInterventionWithDedup(sessionId: string, data: any): void {
+  const key = `${sessionId}-${data.intervention.type}`;
+  const lastEmit = this.interventionCache.get(key);
+  const now = Date.now();
+  
+  // Skip if same intervention was emitted recently
+  if (lastEmit && (now - lastEmit) < this.INTERVENTION_COOLDOWN) {
+    console.log(`Skipping duplicate intervention event for ${key}`);
+    return;
+  }
+  
+  this.interventionCache.set(key, now);
+  this.emit(AutomationEventType.INTERVENTION_REQUIRED, data);
+}
+```
 
 ### Frontend Best Practice:
 ```javascript
