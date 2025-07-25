@@ -386,15 +386,7 @@ export class LinkedInAutomationService extends EventEmitter {
         }
       }
 
-      // Navigate to LinkedIn
-      await this.navigateToLinkedIn(stagehand, session.browserbase_session_id);
-
-      // Check if navigation succeeded (no intervention needed)
-      const currentSession = await this.linkedinSessionService.getSessionByBrowserbaseId(session.browserbase_session_id);
-      if (currentSession?.status === 'intervention_required') {
-        console.log('Automation paused for intervention');
-        return; // Exit gracefully - login monitor will resume
-      }
+      // Let HybridJobSearchFlow handle the navigation and flow
       
       // Get cache and metrics for this session
       const cache = this.jobCaches.get(session.browserbase_session_id)!;
