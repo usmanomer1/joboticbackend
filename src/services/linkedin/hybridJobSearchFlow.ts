@@ -217,7 +217,10 @@ export class HybridJobSearchFlow extends EventEmitter {
       const currentUrl = await this.stagehand.page.url();
       console.log('Current URL after navigation:', currentUrl);
       
-      if (currentUrl.includes('/login') || currentUrl.includes('authwall')) {
+      // Check for login indicators on the page
+      const loginRequired = await this.checkIfLoginRequired();
+      
+      if (loginRequired || currentUrl.includes('/login') || currentUrl.includes('authwall')) {
         console.log('Login required - emitting intervention event');
         
         // Emit intervention required event
@@ -246,6 +249,43 @@ export class HybridJobSearchFlow extends EventEmitter {
     } catch (error) {
       console.error('Failed to navigate to LinkedIn Jobs:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Check if login is required by looking for login elements on the page
+   */
+  private async checkIfLoginRequired(): Promise<boolean> {
+    try {
+      // Check for common LinkedIn login/auth indicators
+      const loginCheck = await this.stagehand.page.extract({
+        instruction: "Check if this page requires login by looking for sign in buttons, login forms, or auth prompts",
+        schema: z.object({
+          hasSignInButton: z.boolean().describe("Is there a Sign In button visible?"),
+          hasLoginForm: z.boolean().describe("Is there a login form with email/password fields?"),
+          hasAuthPrompt: z.boolean().describe("Is there text asking to sign in or join LinkedIn?"),
+          pageTitle: z.string().describe("The page title"),
+          visibleText: z.string().describe("Any visible text about signing in or joining")
+        }),
+        useTextExtract: true
+      });
+
+      console.log('Login check results:', loginCheck);
+      
+      // If any login indicators are found, login is required
+      const requiresLogin = loginCheck.hasSignInButton || 
+                          loginCheck.hasLoginForm || 
+                          loginCheck.hasAuthPrompt ||
+                          loginCheck.pageTitle.toLowerCase().includes('sign in') ||
+                          loginCheck.pageTitle.toLowerCase().includes('login') ||
+                          loginCheck.visibleText.toLowerCase().includes('sign in') ||
+                          loginCheck.visibleText.toLowerCase().includes('join now');
+      
+      return requiresLogin;
+    } catch (error) {
+      console.error('Error checking for login requirement:', error);
+      // If we can't determine, assume login might be needed
+      return true;
     }
   }
 
