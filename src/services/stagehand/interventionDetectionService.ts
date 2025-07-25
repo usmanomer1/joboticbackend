@@ -70,6 +70,10 @@ export class InterventionDetectionService {
     try {
       // Get current page info
       const page = stagehand.page;
+      if (!page) {
+        console.log('No active page in Stagehand');
+        return null;
+      }
       const currentUrl = page.url();
       const pageTitle = await page.title();
 

@@ -84,7 +84,7 @@ export class BrowserbaseSessionManager {
       // Get the debug URLs from Browserbase API
       let liveViewUrl = '';
       try {
-        const debugUrls = await this.getBrowserbaseDebugUrl(browserbaseSession.id);
+        const debugUrls = await this.getSessionDebugUrls(browserbaseSession.id);
         // Use the debuggerUrl which is suitable for embedding in iframes
         liveViewUrl = debugUrls.debuggerUrl;
         console.log('Got debug URL from Browserbase:', liveViewUrl);
