@@ -91,7 +91,7 @@ Response: {
 
 ### 2. Start Job Search
 ```typescript
-POST /api/linkedin/start-job-search
+POST /api/linkedin/start
 
 Headers: {
   Authorization: 'Bearer <jwt_token>',
@@ -99,37 +99,44 @@ Headers: {
 }
 
 Body: {
+  // User ID is required
+  userId: "user-uuid-here",  // The authenticated user's ID
+  
   // Natural language approach (recommended)
   searchPrompt: "software engineer vancouver bc",
   
-  // Optional filters - only include if user selected them
-  // easyApplyOnly: true,  // Uncomment if user wants Easy Apply only
-  // remote: true,         // Uncomment if user wants remote jobs
-  // datePosted: "week",   // Uncomment if user selected date filter
+  // Resume from Supabase Storage
+  resumeUrl: "https://your-supabase.supabase.co/storage/v1/object/public/resumes/file.pdf",
+  resumeMetadata: {
+    fileName: "resume.pdf",
+    fileType: "application/pdf",
+    extractedText: "John Doe, Software Engineer..."  // Optional, for form filling
+  },
   
-  maxApplications: 50,
-  
-  // Resume info
-  resumeId: "uuid-here",  // From your resume service
-  
-  // Profile links (for future use)
-  profileLinks: {
-    github: "https://github.com/username",
-    linkedin: "https://linkedin.com/in/username"
+  // Optional structured config (when not using searchPrompt)
+  config: {
+    // Optional filters - only include if user selected them
+    filters: {
+      easyApplyOnly: true,  // Only if user wants Easy Apply only
+      remote: true,         // Only if user wants remote jobs
+      datePosted: "week"    // Only if user selected date filter
+    },
+    maxApplications: 50
   }
 }
 
 Response: {
-  success: boolean;
-  sessionId: string;
-  liveViewUrl: string;  // For iframe embedding
-  message: string;
+  sessionId: string;             // Browserbase session ID
+  liveViewUrl: string;           // For iframe embedding
+  status: 'running';
+  taskId: string;                // For Browser Use compatibility
+  browserbaseSessionId: string;  // Same as sessionId
 }
 ```
 
 ### 3. Resume After Intervention
 ```typescript
-POST /api/linkedin/resume-automation
+POST /api/linkedin/continue/:sessionId
 
 Headers: {
   Authorization: 'Bearer <jwt_token>',
@@ -137,27 +144,22 @@ Headers: {
 }
 
 Body: {
-  sessionId: "current-session-id",
-  interventionResolved: true
+  interventionCompleted: true  // Optional
 }
 
 Response: {
   success: boolean;
+  status: 'running';
   message: string;
 }
 ```
 
 ### 4. Stop Automation
 ```typescript
-POST /api/linkedin/stop-automation
+DELETE /api/linkedin/stop/:sessionId
 
 Headers: {
-  Authorization: 'Bearer <jwt_token>',
-  'Content-Type': 'application/json'
-}
-
-Body: {
-  sessionId: "current-session-id"
+  Authorization: 'Bearer <jwt_token>'
 }
 ```
 
@@ -276,15 +278,14 @@ ws.send(JSON.stringify({
 4. **Frontend calls resume endpoint**
    ```typescript
    async function resumeAutomation(sessionId: string) {
-     await fetch('/api/linkedin/resume-automation', {
+     await fetch(`/api/linkedin/continue/${sessionId}`, {
        method: 'POST',
        headers: {
          'Authorization': `Bearer ${token}`,
          'Content-Type': 'application/json'
        },
        body: JSON.stringify({
-         sessionId,
-         interventionResolved: true
+         interventionCompleted: true
        })
      });
    }
@@ -314,20 +315,28 @@ if (!contextStatus.hasContext) {
 ```typescript
 // User enters: "software engineer vancouver bc"
 const startAutomation = async (prompt: string, filters?: any) => {
-  const response = await fetch('/api/linkedin/start-job-search', {
+  const response = await fetch('/api/linkedin/start', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      searchPrompt: prompt,  // Direct natural language!
-      // Optional filters - only send if user selected them
-      ...(filters?.easyApplyOnly && { easyApplyOnly: true }),   // Only adds "easy apply" if user wants it
-      ...(filters?.remote && { remote: true }),                  // Only adds "remote" if user wants it
-      ...(filters?.datePosted && { datePosted: filters.datePosted }), // Only applied if user selects
-      maxApplications: filters?.maxApplications || 50,
-      resumeId: selectedResumeId
+      userId: currentUserId,  // The authenticated user's ID
+      searchPrompt: prompt,   // Direct natural language!
+      resumeUrl: selectedResumeUrl,  // From Supabase Storage
+      resumeMetadata: selectedResumeMetadata,
+      // Optional config with filters - only send if user selected them
+      ...(filters && {
+        config: {
+          filters: {
+            ...(filters.easyApplyOnly && { easyApplyOnly: true }),
+            ...(filters.remote && { remote: true }),
+            ...(filters.datePosted && { datePosted: filters.datePosted }),
+          },
+          maxApplications: filters.maxApplications || 50
+        }
+      })
     })
   });
   
