@@ -1,0 +1,35 @@
+# Quick curl test commands for LinkedIn automation
+
+# 1. First, get your JWT token from browser:
+#    - Open DevTools > Network tab
+#    - Look for any API request to your backend
+#    - Copy the Authorization header value (everything after "Bearer ")
+
+# 2. Replace YOUR_JWT_TOKEN_HERE with your actual token
+
+# Test the start endpoint:
+curl -X POST http://localhost:3001/api/linkedin/start \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN_HERE" \
+  -d '{
+    "config": {
+      "searchPrompt": "software engineer test",
+      "easyApplyOnly": false,
+      "maxApplications": 10
+    }
+  }' | jq '.'
+
+# If you don't have jq installed, remove the "| jq '.'" part
+
+# Expected response format:
+# {
+#   "sessionId": "some-uuid",
+#   "liveViewUrl": "https://www.browserbase.com/sessions/some-uuid/live",
+#   "status": "running",
+#   "taskId": "task_some-uuid",
+#   "browserbaseSessionId": "some-uuid"
+# }
+
+# Check the liveViewUrl format:
+# ✅ GOOD: https://www.browserbase.com/sessions/xxx/live
+# ❌ BAD:  https://www.browserbase.com/devtools/inspector.html?wss=...
