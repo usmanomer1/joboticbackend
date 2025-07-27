@@ -792,11 +792,26 @@ export class LinkedInAutomationService extends EventEmitter {
         this.loginMonitors.delete(sessionId);
       }
       
-      // Check current URL to confirm we're logged in
+      // Check current URL
       const currentUrl = await stagehand.page.url();
       console.log('Current URL:', currentUrl);
       
-      if (currentUrl.includes('/jobs/') || currentUrl.includes('/feed/')) {
+      // Check if user is actually logged in by looking at page content
+      const loginCheck = await stagehand.page.extract({
+        instruction: "Check if user is logged in by looking for profile menu, notifications, or other logged-in indicators",
+        schema: z.object({
+          isLoggedIn: z.boolean().describe("Is the user logged in to LinkedIn?"),
+          hasProfileMenu: z.boolean().describe("Is there a profile menu or Me button visible?"),
+          hasNotifications: z.boolean().describe("Are there notification icons visible?"),
+          hasSignInButton: z.boolean().describe("Is there still a Sign In button visible?"),
+          hasSearchBar: z.boolean().describe("Is there a job search bar visible?")
+        }),
+        useTextExtract: false
+      });
+
+      console.log('Login status check:', loginCheck);
+      
+      if (loginCheck.isLoggedIn && !loginCheck.hasSignInButton) {
         // We're logged in, update status and continue
         await this.linkedinSessionService.updateSessionStatus(
           session.id,
