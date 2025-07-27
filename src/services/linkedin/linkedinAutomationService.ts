@@ -866,24 +866,6 @@ export class LinkedInAutomationService extends EventEmitter {
     }
   }
 
-  /**
-   * Upload resume to Browserbase session
-   */
-  private async uploadResume(sessionId: string, resumeUrl: string): Promise<boolean> {
-    try {
-      console.log('Uploading resume from:', resumeUrl);
-      const uploadedFileName = await this.uploadService.uploadResumeFromSupabase(
-        sessionId,
-        resumeUrl
-      );
-      this.uploadedResumes.set(sessionId, uploadedFileName);
-      console.log('Resume uploaded successfully:', uploadedFileName);
-      return true;
-    } catch (error) {
-      console.error('Failed to upload resume:', error);
-      return false;
-    }
-  }
 
   /**
    * Handle automation errors

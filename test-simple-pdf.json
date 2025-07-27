@@ -1,9 +1,0 @@
-{
-  "resumeText": "John Doe\nDeveloper\nJavaScript, React",
-  "format": "pdf",
-  "metadata": {
-    "score": 7.0,
-    "jobTitle": "Developer",
-    "improvements": ["Test improvement"]
-  }
-}
