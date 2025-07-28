@@ -304,19 +304,76 @@ export class HybridJobSearchFlow extends EventEmitter {
       timestamp: new Date()
     });
 
-    // Click search bar and enter query using cached actions
-    await this.performCachedAction('Click on the job search input field');
-    await this.stagehand.page.waitForTimeout(500);
-    
-    await this.performCachedAction('Clear the search field');
-    await this.stagehand.page.waitForTimeout(500);
-    
-    // For dynamic content like search query, we still use regular act
-    await this.stagehand.page.act(`Type "${searchQuery}" in the search field`);
-    await this.stagehand.page.waitForTimeout(1000);
-    
-    await this.performCachedAction('Press Enter or click Search to perform the search');
-    await this.stagehand.page.waitForTimeout(3000);
+    try {
+      // Check if there's a separate location input field
+      const hasLocationField = await this.stagehand.page.extract({
+        instruction: "Check if there's a separate location input field next to the job search field",
+        schema: z.object({
+          hasLocationField: z.boolean(),
+          jobFieldSelector: z.string().optional(),
+          locationFieldSelector: z.string().optional()
+        })
+      });
+
+      if (hasLocationField.hasLocationField && this.config.searchPrompt) {
+        // Extract job title and location from the search prompt
+        const parts = searchQuery.split(/\b(?:in|at|near)\b/i);
+        const jobTitle = parts[0]?.trim() || searchQuery;
+        const location = parts[1]?.trim() || '';
+
+        // Type in job field
+        await this.performCachedAction('Click on the job search input field');
+        await this.stagehand.page.waitForTimeout(500);
+        await this.performCachedAction('Clear the search field');
+        await this.stagehand.page.waitForTimeout(500);
+        await this.stagehand.page.act(`Type "${jobTitle}" in the job search field`);
+        await this.stagehand.page.waitForTimeout(500);
+
+        // Type in location field if location was extracted
+        if (location) {
+          await this.performCachedAction('Click on the location input field');
+          await this.stagehand.page.waitForTimeout(500);
+          await this.performCachedAction('Clear the location field');
+          await this.stagehand.page.waitForTimeout(500);
+          await this.stagehand.page.act(`Type "${location}" in the location field`);
+          await this.stagehand.page.waitForTimeout(500);
+        }
+      } else {
+        // Single search field - type the full query
+        await this.performCachedAction('Click on the job search input field');
+        await this.stagehand.page.waitForTimeout(500);
+        await this.performCachedAction('Clear the search field');
+        await this.stagehand.page.waitForTimeout(500);
+        await this.stagehand.page.act(`Type "${searchQuery}" in the search field`);
+        await this.stagehand.page.waitForTimeout(1000);
+      }
+
+      // Try multiple methods to execute the search
+      try {
+        // Method 1: Press Enter using Playwright keyboard API
+        await this.stagehand.page.keyboard.press('Enter');
+        await this.stagehand.page.waitForTimeout(3000);
+      } catch (error) {
+        console.log('Failed to press Enter, trying to click search button');
+        // Method 2: Click the search button
+        try {
+          await this.performCachedAction('Click the search button');
+          await this.stagehand.page.waitForTimeout(3000);
+        } catch (error2) {
+          console.log('Failed to click search button, trying act with Enter');
+          // Method 3: Use act to press Enter
+          await this.stagehand.page.act('Press Enter to search');
+          await this.stagehand.page.waitForTimeout(3000);
+        }
+      }
+    } catch (error) {
+      console.error('Error during search:', error);
+      // Fallback to simple search
+      await this.performCachedAction('Click on the job search input field');
+      await this.stagehand.page.waitForTimeout(500);
+      await this.stagehand.page.act(`Type "${searchQuery}" and press Enter`);
+      await this.stagehand.page.waitForTimeout(3000);
+    }
   }
 
   /**
@@ -423,9 +480,26 @@ export class HybridJobSearchFlow extends EventEmitter {
       return [];
     }
 
+    // Filter out any invalid jobs and ensure all required fields are present
+    const validJobs: JobListing[] = jobsData.jobs.filter(job => 
+      job.jobId && 
+      job.company && 
+      job.jobTitle && 
+      job.location && 
+      job.jobUrl &&
+      typeof job.isEasyApply === 'boolean'
+    ).map(job => ({
+      jobId: job.jobId,
+      company: job.company,
+      jobTitle: job.jobTitle,
+      location: job.location,
+      jobUrl: job.jobUrl,
+      isEasyApply: job.isEasyApply,
+      alreadyApplied: job.alreadyApplied
+    }));
+
     // Cache the job data
-    for (const job of jobsData.jobs) {
-      // Ensure the job data matches CachedJobData interface
+    for (const job of validJobs) {
       const jobDataToCache = {
         jobId: job.jobId,
         company: job.company,
@@ -444,7 +518,7 @@ export class HybridJobSearchFlow extends EventEmitter {
       });
     }
 
-    return jobsData.jobs;
+    return validJobs;
   }
 
   /**

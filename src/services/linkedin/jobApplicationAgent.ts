@@ -111,53 +111,242 @@ export class JobApplicationAgent extends EventEmitter {
    * Handle external job application with intervention support
    */
   async applyToExternalJob(): Promise<boolean> {
-    try {
-      this.emitStep('Starting external application', { company: this.context.company });
+    const maxRetries = 2;
+    let retryCount = 0;
+    
+    while (retryCount <= maxRetries) {
+      try {
+        this.emitStep('Starting external application', { 
+          company: this.context.company,
+          attempt: retryCount + 1,
+          maxAttempts: maxRetries + 1
+        });
 
-      // Click Apply button using cached observe/act
-      await this.performAction('Click the Apply button', async () => {
-        await this.performCachedAction('Click the Apply button');
-      });
+        // Get all pages before clicking
+        const pagesBefore = this.stagehand.context.pages();
+        const currentPage = this.stagehand.page;
+        const initialUrl = await currentPage.url();
 
-      // Wait for new tab/window or redirect
-      await this.stagehand.page.waitForTimeout(3000);
+        // Click Apply button - this might open a new tab
+        await this.performAction('Click the Apply button', async () => {
+          // Try multiple methods to click the apply button
+          const clickMethods = [
+            async () => {
+              // Method 1: Try Ctrl+click for new tab
+              await this.stagehand.page.act('Hold Ctrl and click the Apply button to open in new tab');
+            },
+            async () => {
+              // Method 2: Regular click
+              await this.performCachedAction('Click the Apply button');
+            },
+            async () => {
+              // Method 3: Direct act
+              await this.stagehand.page.act('Click the Apply button for external application');
+            }
+          ];
 
-      // Check if we're on an external site
-      const currentUrl = await this.stagehand.page.url();
-      const isExternal = !currentUrl.includes('linkedin.com');
+          let clickSuccess = false;
+          for (const [index, clickMethod] of clickMethods.entries()) {
+            try {
+              await clickMethod();
+              clickSuccess = true;
+              console.log(`Successfully clicked Apply button using method ${index + 1}`);
+              break;
+            } catch (error) {
+              console.log(`Click method ${index + 1} failed:`, error.message);
+              if (index === clickMethods.length - 1) {
+                throw new Error('All click methods failed');
+              }
+            }
+          }
+        });
 
-      if (isExternal) {
-        this.emitStep('Navigated to external application site', { url: currentUrl });
+        // Wait for potential new tab or navigation
+        await this.stagehand.page.waitForTimeout(3000);
 
-        // Check if account creation is needed
-        const needsAccount = await this.checkIfAccountCreationNeeded();
+        // Check if a new tab was opened
+        const pagesAfter = this.stagehand.context.pages();
+        let targetPage = currentPage;
+        let isNewTab = false;
         
-        if (needsAccount) {
+        if (pagesAfter.length > pagesBefore.length) {
+          // New tab was opened
+          targetPage = pagesAfter[pagesAfter.length - 1];
+          isNewTab = true;
+          
+          try {
+            await targetPage.bringToFront();
+            this.emitStep('Switched to new tab for external application');
+          } catch (error) {
+            console.error('Error switching to new tab:', error);
+            throw new Error('Failed to switch to new tab');
+          }
+        }
+
+        // Check if we're on an external site
+        let currentUrl: string;
+        try {
+          currentUrl = await targetPage.url();
+        } catch (error) {
+          console.error('Error getting URL from target page:', error);
+          throw new Error('Target page is closed or inaccessible');
+        }
+        
+        const isExternal = !currentUrl.includes('linkedin.com');
+        const didNavigate = currentUrl !== initialUrl;
+
+        if (isExternal) {
+          this.emitStep('On external application site', { 
+            url: currentUrl,
+            isNewTab,
+            company: this.context.company
+          });
+
+          // Emit external site detection
+          this.emit(AutomationEventType.EXTERNAL_SITE_DETECTED, {
+            sessionId: this.sessionId,
+            company: this.context.company,
+            jobUrl: currentUrl,
+            isNewTab
+          });
+
+          // Emit intervention required
           this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
             sessionId: this.sessionId,
             intervention: {
-              type: 'account_creation',
-              message: 'Account creation required for external application',
-              instructions: 'Please create an account on the company website to continue with the application',
-              url: currentUrl
+              type: 'external_application',
+              message: `External application opened for ${this.context.company}`,
+              instructions: 'Please complete the application on the external site. Click Continue when done.',
+              url: currentUrl,
+              metadata: {
+                isNewTab,
+                company: this.context.company,
+                jobTitle: this.context.jobTitle
+              }
             }
+          });
+
+          // Handle tab cleanup
+          if (isNewTab && targetPage !== currentPage) {
+            try {
+              // Wait a bit to ensure the user sees the external site
+              await this.stagehand.page.waitForTimeout(1000);
+              await targetPage.close();
+              console.log('Successfully closed external tab');
+            } catch (error) {
+              console.error('Failed to close external tab:', error);
+              // Continue anyway, not critical
+            }
+            
+            // Switch back to LinkedIn tab
+            try {
+              await currentPage.bringToFront();
+            } catch (error) {
+              console.error('Failed to switch back to LinkedIn tab:', error);
+            }
+          }
+
+          // Mark as handled (not skipped)
+          return true;
+        } else if (didNavigate) {
+          // LinkedIn redirect page or navigation
+          this.emitStep('LinkedIn navigation detected', { 
+            from: initialUrl,
+            to: currentUrl
+          });
+          
+          // If it's in the same tab, go back
+          if (!isNewTab) {
+            try {
+              await this.stagehand.page.goBack();
+              await this.stagehand.page.waitForTimeout(2000);
+            } catch (error) {
+              console.error('Failed to go back:', error);
+            }
+          }
+          
+          return true;
+        } else {
+          // No navigation occurred
+          this.emitStep('No navigation detected after clicking Apply', {
+            url: currentUrl
           });
           return false;
         }
-
-        // Use agent to handle external application
-        const agentPrompt = this.buildExternalApplicationAgentPrompt();
-        const result = await this.executeAgentWithTracking(agentPrompt);
-
-        return result.success;
-      } else {
-        // It's a LinkedIn external redirect page
-        this.emitStep('LinkedIn external application page detected');
-        return true;
+      } catch (error) {
+        console.error(`External application error (attempt ${retryCount + 1}):`, error);
+        this.emitStep('Error during external application', { 
+          error: error.message,
+          attempt: retryCount + 1,
+          willRetry: retryCount < maxRetries
+        });
+        
+        // Recovery attempt
+        const recovered = await this.recoverFromExternalError(error);
+        
+        if (!recovered && retryCount < maxRetries) {
+          retryCount++;
+          console.log(`Retrying external application (attempt ${retryCount + 1})...`);
+          await this.stagehand.page.waitForTimeout(2000);
+          continue;
+        }
+        
+        return false;
       }
-    } catch (error) {
-      console.error('External application error:', error);
-      this.emitStep('Error during external application', { error: error.message });
+    }
+    
+    return false;
+  }
+
+  /**
+   * Recover from external application errors
+   */
+  private async recoverFromExternalError(error: Error): Promise<boolean> {
+    try {
+      console.log('Attempting to recover from external application error...');
+      
+      const pages = this.stagehand.context.pages();
+      const mainPage = pages[0];
+      
+      // Close any extra tabs
+      if (pages.length > 1) {
+        console.log(`Found ${pages.length} open tabs, closing extras...`);
+        for (let i = pages.length - 1; i > 0; i--) {
+          try {
+            const page = pages[i];
+            if (page && !page.isClosed()) {
+              await page.close();
+              console.log(`Closed tab ${i}`);
+            }
+          } catch (closeError) {
+            console.error(`Failed to close tab ${i}:`, closeError.message);
+          }
+        }
+      }
+      
+      // Ensure we're on the main tab
+      if (mainPage && !mainPage.isClosed()) {
+        try {
+          await mainPage.bringToFront();
+          console.log('Successfully switched to main tab');
+          
+          // Check if we're still on LinkedIn
+          const url = await mainPage.url();
+          if (!url.includes('linkedin.com')) {
+            console.log('Main tab is not on LinkedIn, navigating back...');
+            await mainPage.goBack();
+            await mainPage.waitForTimeout(2000);
+          }
+          
+          return true;
+        } catch (bringError) {
+          console.error('Failed to bring main tab to front:', bringError);
+        }
+      }
+      
+      return false;
+    } catch (recoveryError) {
+      console.error('Recovery from external application error failed:', recoveryError);
       return false;
     }
   }
