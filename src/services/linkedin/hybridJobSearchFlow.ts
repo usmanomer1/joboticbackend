@@ -615,9 +615,19 @@ export class HybridJobSearchFlow extends EventEmitter {
         });
       }
 
-      // Return to job listings using cached action
-      await this.performCachedAction('Go back to job listings by clicking the back button or X');
-      await this.stagehand.page.waitForTimeout(2000);
+      // Return to job listings
+      if (success) {
+        try {
+          // Check if we're still on the job details page
+          const currentUrl = await this.stagehand.page.url();
+          if (!currentUrl.includes('/jobs/search/')) {
+            await this.performCachedAction('Go back to job listings by clicking the back button or X');
+            await this.stagehand.page.waitForTimeout(2000);
+          }
+        } catch (navError) {
+          console.error('Error navigating back to listings:', navError);
+        }
+      }
 
       return success;
 
@@ -626,12 +636,31 @@ export class HybridJobSearchFlow extends EventEmitter {
       
       this.metrics.completeApplication(job.jobId, false, error instanceof Error ? error.message : String(error));
       
-      // Try to recover and go back to listings using cached action
-      try {
-        await this.performCachedAction('Close any open modals or go back to job listings');
+      // Check if it's a page closed error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('Target page, context or browser has been closed')) {
+        console.log('Page was closed - likely due to external navigation. Continuing...');
+        
+        // Wait a bit for any tabs to settle
         await this.stagehand.page.waitForTimeout(2000);
-      } catch (recoveryError) {
-        console.error('Failed to recover:', recoveryError);
+        
+        // Try to ensure we're on the main LinkedIn tab
+        try {
+          const pages = this.stagehand.context.pages();
+          if (pages.length > 0) {
+            await pages[0].bringToFront();
+          }
+        } catch (tabError) {
+          console.error('Error switching tabs:', tabError);
+        }
+      } else {
+        // For other errors, try normal recovery
+        try {
+          await this.performCachedAction('Close any open modals or go back to job listings');
+          await this.stagehand.page.waitForTimeout(2000);
+        } catch (recoveryError) {
+          console.error('Failed to recover:', recoveryError);
+        }
       }
       
       return false;

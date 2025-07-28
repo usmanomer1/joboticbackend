@@ -210,127 +210,28 @@ export class JobApplicationAgent extends EventEmitter {
             isNewTab
           });
 
-          // Check if we need to create an account
-          const needsAccount = await this.checkIfAccountCreationNeeded();
+          // For now, we'll request manual intervention for all external applications
+          // This avoids the page context issues when trying to automate external sites
+          this.emitStep('External application requires manual intervention');
           
-          if (needsAccount) {
-            this.emitStep('Account creation required - requesting manual intervention');
-            
-            // Emit intervention required for account creation
-            this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
-              sessionId: this.sessionId,
-              intervention: {
-                type: 'account_required',
-                message: `Account creation required for ${this.context.company}`,
-                instructions: 'Please create an account or log in to continue the application.',
-                url: currentUrl,
-                metadata: {
-                  isNewTab,
-                  company: this.context.company,
-                  jobTitle: this.context.jobTitle
-                }
+          this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
+            sessionId: this.sessionId,
+            intervention: {
+              type: 'external_application',
+              message: `External application opened for ${this.context.company}`,
+              instructions: 'Please complete the application on the external site. The automation will continue after you close this tab or navigate back.',
+              url: currentUrl,
+              metadata: {
+                isNewTab,
+                company: this.context.company,
+                jobTitle: this.context.jobTitle
               }
-            });
+            }
+          });
 
-            // Close the tab and return
-            if (isNewTab && targetPage !== currentPage) {
-              try {
-                await targetPage.close();
-              } catch (error) {
-                console.error('Failed to close external tab:', error);
-              }
-              await currentPage.bringToFront();
-            }
-            
-            return false;
-          }
-
-          // Try to automate the external application
-          this.emitStep('Attempting to automate external application');
-          
-          try {
-            // Use agent to handle the external application
-            const agentPrompt = this.buildExternalApplicationAgentPrompt();
-            const result = await this.executeAgentWithTracking(agentPrompt);
-            
-            if (result.success) {
-              this.emitStep('Successfully submitted external application');
-              
-              // Close the external tab and go back to LinkedIn
-              if (isNewTab && targetPage !== currentPage) {
-                await targetPage.close();
-                await currentPage.bringToFront();
-              } else {
-                // Same tab - go back to LinkedIn
-                await this.stagehand.page.goBack();
-                await this.stagehand.page.waitForTimeout(2000);
-              }
-              
-              return true;
-            } else {
-              // Agent failed - emit intervention
-              this.emitStep('Automated application failed - requesting manual intervention');
-              
-              this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
-                sessionId: this.sessionId,
-                intervention: {
-                  type: 'external_application',
-                  message: `Could not automate application for ${this.context.company}`,
-                  instructions: 'Please complete the application manually. Click Continue when done.',
-                  url: currentUrl,
-                  metadata: {
-                    isNewTab,
-                    company: this.context.company,
-                    jobTitle: this.context.jobTitle,
-                    error: result.error
-                  }
-                }
-              });
-              
-              // Close tab after intervention
-              if (isNewTab && targetPage !== currentPage) {
-                try {
-                  await targetPage.close();
-                } catch (error) {
-                  console.error('Failed to close external tab:', error);
-                }
-                await currentPage.bringToFront();
-              }
-              
-              return false;
-            }
-          } catch (agentError) {
-            console.error('Error during external application automation:', agentError);
-            
-            // Emit intervention on error
-            this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
-              sessionId: this.sessionId,
-              intervention: {
-                type: 'external_application',
-                message: `Error automating application for ${this.context.company}`,
-                instructions: 'Please complete the application manually. Click Continue when done.',
-                url: currentUrl,
-                metadata: {
-                  isNewTab,
-                  company: this.context.company,
-                  jobTitle: this.context.jobTitle,
-                  error: agentError.message
-                }
-              }
-            });
-            
-            // Close tab
-            if (isNewTab && targetPage !== currentPage) {
-              try {
-                await targetPage.close();
-              } catch (error) {
-                console.error('Failed to close external tab:', error);
-              }
-              await currentPage.bringToFront();
-            }
-            
-            return false;
-          }
+          // Don't close the tab immediately - let the user complete the application
+          // The automation will handle recovery when they come back
+          return true;
         } else if (didNavigate) {
           // LinkedIn redirect page or navigation
           this.emitStep('LinkedIn navigation detected', { 
@@ -534,7 +435,20 @@ export class JobApplicationAgent extends EventEmitter {
     try {
       // First check if we're on the correct page (targetPage might be different from stagehand.page)
       const pages = this.stagehand.context.pages();
+      if (pages.length === 0) {
+        console.error('No pages available in context');
+        return false;
+      }
+      
       const targetPage = pages[pages.length - 1]; // Most recent page
+      
+      // Check if the page is still valid
+      try {
+        await targetPage.url();
+      } catch (error) {
+        console.error('Target page is closed or invalid');
+        return false;
+      }
       
       // We need to use the target page for extraction
       // Since Stagehand doesn't expose a way to change the page, we'll try with the current context
