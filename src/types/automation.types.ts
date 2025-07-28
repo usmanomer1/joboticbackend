@@ -95,19 +95,15 @@ export interface JobSearchConfig {
   };
   targetCount?: number;
   maxApplications?: number;  // Maximum number of applications to submit
-  easyApplyOnly?: boolean;
   keywords?: string[];
   excludeKeywords?: string[];
   
-  // Filters for job search
-  filters?: {
-    datePosted?: 'day' | 'week' | 'month';
-    jobType?: string[];
-    remote?: boolean;
-    easyApplyOnly?: boolean;
-    keywords?: string[];
-  };
+  // LinkedIn UI Filters - applied via UI controls
   datePosted?: 'day' | 'week' | 'month';  // When the job was posted
+  easyApplyOnly?: boolean;
+  under10Applicants?: boolean;
+  inMyNetwork?: boolean;
+  company?: string;  // Specific company filter
   
   // Resume handling
   resumeUrl?: string;  // Supabase Storage URL
@@ -115,6 +111,17 @@ export interface JobSearchConfig {
     fileName: string;
     fileType: string;
     extractedText?: string;  // Pre-extracted text for form filling
+  };
+  
+  // User profile for form filling
+  userProfile?: {
+    fullName: string;
+    email: string;
+    phone?: string;
+    location?: string;
+    linkedinUrl?: string;
+    currentPosition?: string;
+    currentCompany?: string;
   };
   
   // External application config

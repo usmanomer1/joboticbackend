@@ -23,8 +23,9 @@ const supabase = createClient(
 // Request validation schemas
 const startAutomationSchema = z.object({
   userId: z.string().uuid(),
-  // Natural language search option
-  searchPrompt: z.string().optional(),
+  // Natural language search option (e.g., "software engineer intern canada on site")
+  searchPrompt: z.string(),
+  
   // Resume from Supabase Storage
   resumeUrl: z.string().url().optional(),
   resumeMetadata: z.object({
@@ -32,31 +33,36 @@ const startAutomationSchema = z.object({
     fileType: z.string(),
     extractedText: z.string().optional()
   }).optional(),
-  // Configuration (optional when using searchPrompt)
-  config: z.object({
-    jobTitle: z.string().min(1).optional(),
-    location: z.string().min(1).optional(),
-    experience: z.array(z.enum(['INTERNSHIP', 'ENTRY_LEVEL', 'MID_LEVEL', 'SENIOR_LEVEL', 'DIRECTOR', 'EXECUTIVE'])).optional(),
-    filters: z.object({
-      datePosted: z.enum(['day', 'week', 'month']).optional(),
-      jobType: z.array(z.enum(['FULL_TIME', 'PART_TIME', 'CONTRACT', 'TEMPORARY', 'INTERNSHIP'])).optional(),
-      remote: z.boolean().optional(),
-      easyApplyOnly: z.boolean().optional(),
-      keywords: z.array(z.string()).optional()
-    }).optional(),
-    maxApplications: z.number().min(1).max(100).optional(),
-    externalApplicationConfig: z.object({
-      autoCreateAccount: z.boolean().optional(),
-      defaultEmail: z.string().email().optional(),
-      defaultPassword: z.string().optional(),
-      pauseOnAccountCreation: z.boolean().optional()
-    }).optional()
+  
+  // LinkedIn UI Filters - applied via UI controls
+  filters: z.object({
+    datePosted: z.enum(['day', 'week', 'month']).optional(),
+    easyApplyOnly: z.boolean().optional(),
+    under10Applicants: z.boolean().optional(),
+    inMyNetwork: z.boolean().optional(),
+    company: z.string().optional()
+  }).optional(),
+  
+  // User profile for form filling
+  userProfile: z.object({
+    fullName: z.string(),
+    email: z.string().email(),
+    phone: z.string().optional(),
+    location: z.string().optional(),
+    linkedinUrl: z.string().optional(),
+    currentPosition: z.string().optional(),
+    currentCompany: z.string().optional()
+  }).optional(),
+  
+  maxApplications: z.number().min(1).max(100).optional(),
+  
+  // External application config
+  externalApplicationConfig: z.object({
+    autoCreateAccount: z.boolean().optional(),
+    defaultEmail: z.string().email().optional(),
+    defaultPassword: z.string().optional(),
+    pauseOnAccountCreation: z.boolean().optional()
   }).optional()
-}).refine((data) => {
-  // Either searchPrompt or jobTitle must be provided
-  return data.searchPrompt || data.config?.jobTitle;
-}, {
-  message: "Either searchPrompt or config.jobTitle must be provided"
 });
 
 const continueInterventionSchema = z.object({
@@ -243,7 +249,7 @@ export class LinkedInAutomationController {
         return;
       }
 
-      const { userId, searchPrompt, resumeUrl, resumeMetadata, config } = validation.data;
+      const { userId, searchPrompt, resumeUrl, resumeMetadata, filters, userProfile, maxApplications, externalApplicationConfig } = validation.data;
       const authenticatedUserId = (req as any).user?.id;
 
       // Verify user is starting automation for themselves
@@ -256,31 +262,27 @@ export class LinkedInAutomationController {
       }
 
       // Log API call
-      await this.logApiCall(userId, 'start_automation', { searchPrompt, config });
+      await this.logApiCall(userId, 'start_automation', { searchPrompt, filters });
 
       // Transform config to match internal format
       let jobSearchConfig: JobSearchConfig = {
         searchPrompt,
-        jobTitle: config?.jobTitle,
-        location: config?.location,
-        experienceLevel: config?.experience,
-        datePosted: config?.filters?.datePosted,
-        jobType: config?.filters?.jobType,
-        remote: config?.filters?.remote,
-        easyApplyOnly: config?.filters?.easyApplyOnly ?? false, // Default to false to apply to all jobs
-        keywords: config?.filters?.keywords,
-        maxApplications: config?.maxApplications ?? 50,
+        // LinkedIn UI filters
+        datePosted: filters?.datePosted,
+        easyApplyOnly: filters?.easyApplyOnly,
+        under10Applicants: filters?.under10Applicants,
+        inMyNetwork: filters?.inMyNetwork,
+        company: filters?.company,
+        // User profile for form filling
+        userProfile,
+        maxApplications: maxApplications ?? 50,
         resumeUrl,
         resumeMetadata,
-        externalApplicationConfig: config?.externalApplicationConfig
+        externalApplicationConfig
       };
 
-      // If only searchPrompt is provided, optionally parse it for filters
-      // This is optional - Stagehand can handle natural language directly
-      if (searchPrompt && !config?.jobTitle) {
-        console.log('Using natural language prompt for job search:', searchPrompt);
-        // The automation service will handle filter extraction from the prompt
-      }
+      console.log('Using natural language prompt for job search:', searchPrompt);
+      console.log('UI filters:', filters);
 
       // Start automation
       console.log(`[${requestId}] Calling automationService.startJobSearch for user ${userId}`);
