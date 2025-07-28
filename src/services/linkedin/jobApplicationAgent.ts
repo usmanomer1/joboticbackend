@@ -210,44 +210,127 @@ export class JobApplicationAgent extends EventEmitter {
             isNewTab
           });
 
-          // Emit intervention required
-          this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
-            sessionId: this.sessionId,
-            intervention: {
-              type: 'external_application',
-              message: `External application opened for ${this.context.company}`,
-              instructions: 'Please complete the application on the external site. Click Continue when done.',
-              url: currentUrl,
-              metadata: {
-                isNewTab,
-                company: this.context.company,
-                jobTitle: this.context.jobTitle
+          // Check if we need to create an account
+          const needsAccount = await this.checkIfAccountCreationNeeded();
+          
+          if (needsAccount) {
+            this.emitStep('Account creation required - requesting manual intervention');
+            
+            // Emit intervention required for account creation
+            this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
+              sessionId: this.sessionId,
+              intervention: {
+                type: 'account_required',
+                message: `Account creation required for ${this.context.company}`,
+                instructions: 'Please create an account or log in to continue the application.',
+                url: currentUrl,
+                metadata: {
+                  isNewTab,
+                  company: this.context.company,
+                  jobTitle: this.context.jobTitle
+                }
               }
-            }
-          });
+            });
 
-          // Handle tab cleanup
-          if (isNewTab && targetPage !== currentPage) {
-            try {
-              // Wait a bit to ensure the user sees the external site
-              await this.stagehand.page.waitForTimeout(1000);
-              await targetPage.close();
-              console.log('Successfully closed external tab');
-            } catch (error) {
-              console.error('Failed to close external tab:', error);
-              // Continue anyway, not critical
+            // Close the tab and return
+            if (isNewTab && targetPage !== currentPage) {
+              try {
+                await targetPage.close();
+              } catch (error) {
+                console.error('Failed to close external tab:', error);
+              }
+              await currentPage.bringToFront();
             }
             
-            // Switch back to LinkedIn tab
-            try {
-              await currentPage.bringToFront();
-            } catch (error) {
-              console.error('Failed to switch back to LinkedIn tab:', error);
-            }
+            return false;
           }
 
-          // Mark as handled (not skipped)
-          return true;
+          // Try to automate the external application
+          this.emitStep('Attempting to automate external application');
+          
+          try {
+            // Use agent to handle the external application
+            const agentPrompt = this.buildExternalApplicationAgentPrompt();
+            const result = await this.executeAgentWithTracking(agentPrompt);
+            
+            if (result.success) {
+              this.emitStep('Successfully submitted external application');
+              
+              // Close the external tab and go back to LinkedIn
+              if (isNewTab && targetPage !== currentPage) {
+                await targetPage.close();
+                await currentPage.bringToFront();
+              } else {
+                // Same tab - go back to LinkedIn
+                await this.stagehand.page.goBack();
+                await this.stagehand.page.waitForTimeout(2000);
+              }
+              
+              return true;
+            } else {
+              // Agent failed - emit intervention
+              this.emitStep('Automated application failed - requesting manual intervention');
+              
+              this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
+                sessionId: this.sessionId,
+                intervention: {
+                  type: 'external_application',
+                  message: `Could not automate application for ${this.context.company}`,
+                  instructions: 'Please complete the application manually. Click Continue when done.',
+                  url: currentUrl,
+                  metadata: {
+                    isNewTab,
+                    company: this.context.company,
+                    jobTitle: this.context.jobTitle,
+                    error: result.error
+                  }
+                }
+              });
+              
+              // Close tab after intervention
+              if (isNewTab && targetPage !== currentPage) {
+                try {
+                  await targetPage.close();
+                } catch (error) {
+                  console.error('Failed to close external tab:', error);
+                }
+                await currentPage.bringToFront();
+              }
+              
+              return false;
+            }
+          } catch (agentError) {
+            console.error('Error during external application automation:', agentError);
+            
+            // Emit intervention on error
+            this.emit(AutomationEventType.INTERVENTION_REQUIRED, {
+              sessionId: this.sessionId,
+              intervention: {
+                type: 'external_application',
+                message: `Error automating application for ${this.context.company}`,
+                instructions: 'Please complete the application manually. Click Continue when done.',
+                url: currentUrl,
+                metadata: {
+                  isNewTab,
+                  company: this.context.company,
+                  jobTitle: this.context.jobTitle,
+                  error: agentError.message
+                }
+              }
+            });
+            
+            // Close tab
+            if (isNewTab && targetPage !== currentPage) {
+              try {
+                await targetPage.close();
+              } catch (error) {
+                console.error('Failed to close external tab:', error);
+              }
+              await currentPage.bringToFront();
+            }
+            
+            return false;
+          }
         } else if (didNavigate) {
           // LinkedIn redirect page or navigation
           this.emitStep('LinkedIn navigation detected', { 
@@ -449,6 +532,12 @@ export class JobApplicationAgent extends EventEmitter {
    */
   private async checkIfAccountCreationNeeded(): Promise<boolean> {
     try {
+      // First check if we're on the correct page (targetPage might be different from stagehand.page)
+      const pages = this.stagehand.context.pages();
+      const targetPage = pages[pages.length - 1]; // Most recent page
+      
+      // We need to use the target page for extraction
+      // Since Stagehand doesn't expose a way to change the page, we'll try with the current context
       const pageContent = await this.stagehand.page.extract({
         instruction: "Check if this page requires creating a new account or logging in",
         schema: z.object({
@@ -463,6 +552,7 @@ export class JobApplicationAgent extends EventEmitter {
              (pageContent.hasLoginForm || pageContent.hasSignupForm || pageContent.hasCreateAccountButton);
     } catch (error) {
       console.error('Error checking for account creation:', error);
+      // If we can't check, assume we can proceed
       return false;
     }
   }
