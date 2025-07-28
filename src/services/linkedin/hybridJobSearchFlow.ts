@@ -257,35 +257,54 @@ export class HybridJobSearchFlow extends EventEmitter {
    */
   private async checkIfLoginRequired(): Promise<boolean> {
     try {
-      // Check for common LinkedIn login/auth indicators
-      const loginCheck = await this.stagehand.page.extract({
-        instruction: "Check if this page requires login by looking for sign in buttons, login forms, or auth prompts",
-        schema: z.object({
-          hasSignInButton: z.boolean().describe("Is there a Sign In button visible?"),
-          hasLoginForm: z.boolean().describe("Is there a login form with email/password fields?"),
-          hasAuthPrompt: z.boolean().describe("Is there text asking to sign in or join LinkedIn?"),
-          pageTitle: z.string().describe("The page title"),
-          visibleText: z.string().describe("Any visible text about signing in or joining")
-        }),
-        useTextExtract: true
-      });
-
-      console.log('Login check results:', loginCheck);
+      // First check the URL - if we're on the jobs page, we're likely logged in
+      const currentUrl = await this.stagehand.page.url();
+      console.log('Checking login status on URL:', currentUrl);
       
-      // If any login indicators are found, login is required
-      const requiresLogin = loginCheck.hasSignInButton || 
-                          loginCheck.hasLoginForm || 
-                          loginCheck.hasAuthPrompt ||
-                          loginCheck.pageTitle.toLowerCase().includes('sign in') ||
-                          loginCheck.pageTitle.toLowerCase().includes('login') ||
-                          loginCheck.visibleText.toLowerCase().includes('sign in') ||
-                          loginCheck.visibleText.toLowerCase().includes('join now');
+      if (currentUrl.includes('/jobs/') || currentUrl.includes('/jobs?')) {
+        console.log('Already on jobs page, assuming logged in');
+        return false;
+      }
       
-      return requiresLogin;
+      // Try a simpler extraction without text that might have Unicode issues
+      try {
+        const simpleCheck = await this.stagehand.page.extract({
+          instruction: "Check if there is a Sign In button or login form visible on the page",
+          schema: z.object({
+            hasSignInButton: z.boolean(),
+            hasLoginForm: z.boolean()
+          }),
+          useTextExtract: false // Don't extract text to avoid Unicode issues
+        });
+        
+        console.log('Simple login check results:', simpleCheck);
+        return simpleCheck.hasSignInButton || simpleCheck.hasLoginForm;
+        
+      } catch (extractError) {
+        console.error('Extract failed, checking page title instead:', extractError);
+        
+        // Fallback: check page title using evaluate
+        try {
+          const pageTitle = await this.stagehand.page.evaluate(() => document.title);
+          console.log('Page title:', pageTitle);
+          
+          const titleLower = pageTitle.toLowerCase();
+          return titleLower.includes('sign in') || 
+                 titleLower.includes('login') || 
+                 titleLower.includes('join linkedin');
+        } catch (evalError) {
+          console.error('Page title check failed:', evalError);
+          
+          // Final fallback: check if URL suggests login page
+          return currentUrl.includes('/login') || 
+                 currentUrl.includes('authwall') || 
+                 currentUrl.includes('/uas/');
+        }
+      }
     } catch (error) {
-      console.error('Error checking for login requirement:', error);
-      // If we can't determine, assume login might be needed
-      return true;
+      console.error('Error in login check:', error);
+      // If all checks fail, assume we're okay to proceed
+      return false;
     }
   }
 
