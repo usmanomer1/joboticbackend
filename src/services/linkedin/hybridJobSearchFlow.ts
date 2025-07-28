@@ -293,20 +293,10 @@ export class HybridJobSearchFlow extends EventEmitter {
    * Perform job search using cached observe/act pattern
    */
   private async performSearch(): Promise<void> {
-    // Build search query with filters included
-    let searchQuery = this.config.searchPrompt || 
-                      `${this.config.jobTitle} ${this.config.location}`.trim();
-    
-    // Add filter keywords directly to search query if not already included
-    if (this.config.remote && !searchQuery.toLowerCase().includes('remote')) {
-      searchQuery += ' remote';
-    }
-    
-    if (this.config.easyApplyOnly && !searchQuery.toLowerCase().includes('easy apply')) {
-      searchQuery += ' easy apply';
-    }
-    
-    // Date posted still needs UI filter as LinkedIn doesn't support it in search
+    // Use ONLY the searchPrompt or jobTitle + location
+    // Do NOT add filters to the search text - LinkedIn can parse location and job type from natural language
+    const searchQuery = this.config.searchPrompt || 
+                       `${this.config.jobTitle} ${this.config.location}`.trim();
 
     this.emit(AutomationEventType.ACTION_PERFORMED, {
       sessionId: this.session.browserbase_session_id,
@@ -331,26 +321,10 @@ export class HybridJobSearchFlow extends EventEmitter {
 
   /**
    * Apply search filters using cached observe/act pattern
-   * Only applies filters that can't be done via search query
+   * Only applies UI filters requested by the frontend
    */
   private async applyFilters(): Promise<void> {
-    // Skip Easy Apply filter if already in search query
-    const searchQuery = this.config.searchPrompt || '';
-    const needsEasyApplyFilter = this.config.easyApplyOnly && 
-                                  !searchQuery.toLowerCase().includes('easy apply');
-    
-    if (needsEasyApplyFilter) {
-      this.emit(AutomationEventType.ACTION_PERFORMED, {
-        sessionId: this.session.browserbase_session_id,
-        action: 'Applying Easy Apply filter via UI',
-        timestamp: new Date()
-      });
-      
-      await this.performCachedAction('Click on the Easy Apply filter toggle');
-      await this.stagehand.page.waitForTimeout(2000);
-    }
-
-    // Date Posted always needs UI filter
+    // Apply Date Posted filter
     if (this.config.datePosted) {
       this.emit(AutomationEventType.ACTION_PERFORMED, {
         sessionId: this.session.browserbase_session_id,
@@ -364,18 +338,55 @@ export class HybridJobSearchFlow extends EventEmitter {
       await this.stagehand.page.waitForTimeout(2000);
     }
 
-    // Skip Remote filter if already in search query
-    const needsRemoteFilter = this.config.remote && 
-                             !searchQuery.toLowerCase().includes('remote');
-    
-    if (needsRemoteFilter) {
+    // Apply Easy Apply filter
+    if (this.config.easyApplyOnly) {
       this.emit(AutomationEventType.ACTION_PERFORMED, {
         sessionId: this.session.browserbase_session_id,
-        action: 'Applying Remote filter via UI',
+        action: 'Applying Easy Apply filter',
         timestamp: new Date()
       });
       
-      await this.performCachedAction('Click on the Remote filter toggle');
+      await this.performCachedAction('Click on the Easy Apply filter toggle');
+      await this.stagehand.page.waitForTimeout(2000);
+    }
+
+    // Apply Under 10 applicants filter
+    if (this.config.under10Applicants) {
+      this.emit(AutomationEventType.ACTION_PERFORMED, {
+        sessionId: this.session.browserbase_session_id,
+        action: 'Applying Under 10 applicants filter',
+        timestamp: new Date()
+      });
+      
+      await this.performCachedAction('Click on the Under 10 applicants filter');
+      await this.stagehand.page.waitForTimeout(2000);
+    }
+
+    // Apply In my network filter
+    if (this.config.inMyNetwork) {
+      this.emit(AutomationEventType.ACTION_PERFORMED, {
+        sessionId: this.session.browserbase_session_id,
+        action: 'Applying In my network filter',
+        timestamp: new Date()
+      });
+      
+      await this.performCachedAction('Click on the In my network filter');
+      await this.stagehand.page.waitForTimeout(2000);
+    }
+
+    // Apply Company filter
+    if (this.config.company) {
+      this.emit(AutomationEventType.ACTION_PERFORMED, {
+        sessionId: this.session.browserbase_session_id,
+        action: `Applying Company filter: ${this.config.company}`,
+        timestamp: new Date()
+      });
+      
+      await this.performCachedAction('Click on the Company filter');
+      await this.stagehand.page.waitForTimeout(1000);
+      await this.stagehand.page.act(`Type "${this.config.company}" in the company filter field`);
+      await this.stagehand.page.waitForTimeout(1000);
+      await this.performCachedAction('Select the matching company from the dropdown');
       await this.stagehand.page.waitForTimeout(2000);
     }
   }

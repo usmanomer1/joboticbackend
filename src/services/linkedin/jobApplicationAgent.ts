@@ -184,21 +184,27 @@ export class JobApplicationAgent extends EventEmitter {
     }, 1000);
 
     try {
-      // Execute the agent
-      const result = await this.stagehand.page.agent({
-        prompt,
-        maxSteps
+      // Create and execute the agent
+      const agent = this.stagehand.agent({
+        provider: "openai",
+        model: "gpt-4o",
+        instructions: "You are a helpful assistant filling out job applications. Be careful and accurate with form fields.",
+        options: {
+          apiKey: process.env.OPENAI_API_KEY,
+        }
       });
+
+      const result = await agent.execute(prompt);
 
       clearInterval(pollInterval);
 
-      // Process and emit all agent steps
-      if (result.steps && Array.isArray(result.steps)) {
-        for (const step of result.steps) {
+      // Process and emit all agent actions
+      if (result.actions && Array.isArray(result.actions)) {
+        for (const action of result.actions) {
           this.emit(AutomationEventType.AGENT_STEP, {
             sessionId: this.sessionId,
-            action: step.action,
-            element: step.element,
+            action: action.type,
+            description: action.description || action.parameters,
             timestamp: new Date()
           });
         }
@@ -208,10 +214,11 @@ export class JobApplicationAgent extends EventEmitter {
       this.emit(AutomationEventType.AGENT_COMPLETE, {
         sessionId: this.sessionId,
         success: result.success,
-        totalSteps: result.steps?.length || 0
+        message: result.message,
+        totalSteps: result.actions?.length || 0
       });
 
-      return { success: result.success };
+      return { success: result.success, message: result.message };
     } catch (error) {
       clearInterval(pollInterval);
       console.error('Agent execution error:', error);
