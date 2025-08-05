@@ -20,10 +20,7 @@
     "sourceMap": true
   },
   "include": [
-    "src/**/*",
-    "src/services/linkedin/**/*",
-    "src/services/browserbase/**/*",
-    "src/services/stagehand/**/*"
+    "src/**/*"
   ],
   "exclude": [
     "node_modules",
