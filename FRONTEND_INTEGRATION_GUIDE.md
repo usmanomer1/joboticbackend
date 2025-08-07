@@ -63,8 +63,7 @@ async function searchJobs(query, location, resumeText) {
       query,
       location,
       resumeText,
-      offset: 0,
-      limit: 10 // Get first 10 jobs instantly
+      limit: 10 // First page size (first batch is immediate)
     })
   });
 
@@ -73,11 +72,9 @@ async function searchJobs(query, location, resumeText) {
   /* Response structure:
   {
     success: true,
-    jobs: [...], // First 10 jobs with AI scores
-    total: 127,  // Total jobs found
-    offset: 0,
-    hasMore: true,
-    sessionId: "abc123...", // Important: Save this for pagination
+    jobs: [...],
+    total: 127, // total jobs discovered
+    sessionId: "abc123...", // Save for pagination
     message: "Processing 127 jobs in background..."
   }
   */
@@ -86,21 +83,12 @@ async function searchJobs(query, location, resumeText) {
 }
 ```
 
-### Loading More Jobs (Pagination)
+### Loading More Jobs (Cursor Pagination)
 
 ```javascript
-async function loadMoreJobs(sessionId, currentOffset = 0) {
-  const response = await fetch('/api/v2/jobs/match', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    },
-    body: JSON.stringify({
-      sessionId, // Use the sessionId from initial search
-      offset: currentOffset + 10,
-      limit: 10
-    })
+async function loadMoreJobs(sessionId, cursor, limit = 10) {
+  const response = await fetch(`/api/v2/jobs/session/${sessionId}?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(JSON.stringify(cursor))}` : ''}`, {
+    headers: { 'Authorization': `Bearer ${token}` }
   });
 
   const data = await response.json();
@@ -108,11 +96,10 @@ async function loadMoreJobs(sessionId, currentOffset = 0) {
   /* Response:
   {
     success: true,
-    jobs: [...], // Next 10 jobs
-    total: 127,
-    offset: 10,
-    hasMore: true,
-    sessionId: "abc123..."
+    session: { status, processedCount, totalJobs, createdAt },
+    jobs: [...], // page items, sorted by highest match score
+    cursor: { ... }, // pass back on next request
+    isDone: false // when true, no further pages
   }
   */
   
@@ -163,9 +150,8 @@ function JobSearch() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState(null);
-  const [hasMore, setHasMore] = useState(false);
-  const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [cursor, setCursor] = useState(null);
+  const [isDone, setIsDone] = useState(false);
 
   // Initial search
   const handleSearch = async (query, location, resumeText) => {
@@ -192,14 +178,9 @@ function JobSearch() {
       if (data.success) {
         setJobs(data.jobs);
         setSessionId(data.sessionId);
-        setHasMore(data.hasMore);
-        setTotal(data.total);
-        setOffset(0);
-        
-        // Start polling for background processing updates
-        if (data.hasMore) {
-          startPolling(data.sessionId);
-        }
+        setCursor(null);
+        setIsDone(false);
+        startPolling(data.sessionId);
       }
     } catch (error) {
       console.error('Search failed:', error);
@@ -210,30 +191,21 @@ function JobSearch() {
 
   // Load more jobs
   const loadMore = async () => {
-    if (!sessionId || !hasMore || loading) return;
+    if (!sessionId || isDone || loading) return;
     
     setLoading(true);
     
     try {
-      const response = await fetch('/api/v2/jobs/match', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          sessionId,
-          offset: offset + 10,
-          limit: 10
-        })
+      const response = await fetch(`/api/v2/jobs/session/${sessionId}?limit=10${cursor ? `&cursor=${encodeURIComponent(JSON.stringify(cursor))}` : ''}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
       });
 
       const data = await response.json();
       
       if (data.success) {
         setJobs(prev => [...prev, ...data.jobs]);
-        setOffset(data.offset);
-        setHasMore(data.hasMore);
+        setCursor(data.cursor || null);
+        setIsDone(!!data.isDone);
       }
     } catch (error) {
       console.error('Load more failed:', error);
@@ -280,14 +252,14 @@ function JobSearch() {
       <JobList jobs={jobs} />
       
       {/* Load more button */}
-      {hasMore && (
+      {!isDone && (
         <button onClick={loadMore} disabled={loading}>
-          {loading ? 'Loading...' : `Load More (${jobs.length} of ${total})`}
+          {loading ? 'Loading...' : 'Load More'}
         </button>
       )}
       
       {/* Progress indicator */}
-      <ProgressBar current={jobs.length} total={total} />
+      <ProgressBar current={session?.processedCount ?? jobs.length} total={session?.totalJobs ?? jobs.length} />
     </div>
   );
 }
@@ -310,7 +282,7 @@ function JobSearchWithConvex() {
   // Real-time subscription to job updates
   const processedJobs = useQuery(
     api.jobs.getProcessedJobs,
-    sessionId ? { sessionId, offset: 0, limit: 100 } : "skip"
+    sessionId ? { sessionId, limit: 100 } : "skip"
   );
   
   // Session status subscription

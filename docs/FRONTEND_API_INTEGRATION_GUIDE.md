@@ -366,8 +366,54 @@ socket.on('error', (data) => {
 });
 ```
 
-## Job Search Endpoints
+## Progressive Job Loading Endpoints (v2)
 
+### 1. Start Progressive Search
+
+Endpoint: `POST /api/v2/jobs/match` (Supabase Bearer token required)
+
+Body:
+```json
+{
+  "query": "software engineer",
+  "location": "United States",
+  "resumeText": "<min 100 chars>",
+  "limit": 10
+}
+```
+
+Response:
+```json
+{
+  "success": true,
+  "jobs": [/* first batch */],
+  "total": 127,
+  "sessionId": "k1d_jobSearchSessions:abc123",
+  "message": "Processing 127 jobs in background..."
+}
+```
+
+### 2. Continue With Cursor
+
+Endpoint: `GET /api/v2/jobs/session/:sessionId?limit=10&cursor=<opaque>`
+
+Response:
+```json
+{
+  "success": true,
+  "session": { "status": "processing", "processedCount": 45, "totalJobs": 127 },
+  "jobs": [/* page */],
+  "cursor": { /* opaque */ },
+  "isDone": false
+}
+```
+
+Notes:
+- Use `cursor` from the previous response for the next page
+- Sorting is by highest match score
+- Stop when `isDone` is true
+
+## Legacy Job Search Endpoints (v1)
 ### 1. Search Jobs
 
 **Endpoint:** `POST /api/jobs/search`

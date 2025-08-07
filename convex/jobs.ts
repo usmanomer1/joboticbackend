@@ -83,6 +83,7 @@ export const storeProcessedJobs = mutation({
       await ctx.db.insert("processedJobs", {
         sessionId: args.sessionId,
         ...job,
+        matchScoreNeg: job.matchScore != null ? -job.matchScore : undefined,
         processedAt: Date.now(),
         batchNumber: args.batchNumber,
       });
@@ -108,6 +109,15 @@ export const getSessionStatus = query({
   args: { sessionId: v.id("jobSearchSessions") },
   handler: async (ctx, args) => {
     const session = await ctx.db.get(args.sessionId);
+    if (!session) return null;
+
+    // Enforce ownership when identity is present
+    if (ctx.auth && ctx.auth.identity) {
+      const identityUserId = ctx.auth.identity.subject;
+      if (session.userId !== identityUserId) {
+        throw new Error("Unauthorized: session does not belong to user");
+      }
+    }
     return session;
   },
 });
@@ -116,34 +126,35 @@ export const getSessionStatus = query({
 export const getProcessedJobs = query({
   args: {
     sessionId: v.id("jobSearchSessions"),
-    offset: v.optional(v.number()),
     limit: v.optional(v.number()),
+    cursor: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
-    const offset = args.offset || 0;
-    const limit = args.limit || 10;
+    const limit = Math.min(Math.max(args.limit ?? 10, 1), 100);
 
-    // Get all processed jobs for this session
-    const allJobs = await ctx.db
+    const session = await ctx.db.get(args.sessionId);
+    if (!session) return { jobs: [], cursor: null, isDone: true };
+    if (ctx.auth && ctx.auth.identity) {
+      const identityUserId = ctx.auth.identity.subject;
+      if (session.userId !== identityUserId) {
+        throw new Error("Unauthorized: session does not belong to user");
+      }
+    }
+
+    const queryBuilder = ctx.db
       .query("processedJobs")
-      .withIndex("by_session", (q) => q.eq("sessionId", args.sessionId))
-      .collect();
+      .withIndex("by_session_score", (q) => q.eq("sessionId", args.sessionId))
+      .order("asc"); // asc on matchScoreNeg yields highest score first
 
-    // Sort by match score (highest first)
-    const sortedJobs = allJobs.sort((a, b) => {
-      const scoreA = a.matchScore || 0;
-      const scoreB = b.matchScore || 0;
-      return scoreB - scoreA;
+    const page = await queryBuilder.paginate({
+      cursor: args.cursor,
+      numItems: limit,
     });
 
-    // Apply pagination
-    const paginatedJobs = sortedJobs.slice(offset, offset + limit);
-    
     return {
-      jobs: paginatedJobs,
-      total: allJobs.length,
-      offset: offset,
-      hasMore: offset + limit < allJobs.length,
+      jobs: page.page,
+      cursor: page.continueCursor,
+      isDone: page.isDone,
     };
   },
 });
@@ -170,6 +181,15 @@ export const getJobsByBatch = query({
 export const getUserSessions = query({
   args: { userId: v.string() },
   handler: async (ctx, args) => {
+    // Require identity and ownership for browser access
+    if (!ctx.auth?.identity) {
+      throw new Error("Unauthorized: missing identity");
+    }
+    const identityUserId = ctx.auth.identity.subject;
+    if (identityUserId !== args.userId) {
+      throw new Error("Unauthorized: userId mismatch");
+    }
+
     const sessions = await ctx.db
       .query("jobSearchSessions")
       .withIndex("by_user", (q) => q.eq("userId", args.userId))
@@ -177,6 +197,47 @@ export const getUserSessions = query({
       .take(10);
 
     return sessions;
+  },
+});
+
+// Mutation to purge old data
+export const purgeOldData = mutation({
+  args: { maxAgeDays: v.number() },
+  handler: async (ctx, args) => {
+    const cutoff = Date.now() - args.maxAgeDays * 24 * 60 * 60 * 1000;
+
+    // Delete processed jobs by processedAt
+    const oldProcessed = await ctx.db
+      .query("processedJobs")
+      .withIndex("by_processedAt", (q) => q.lt("processedAt", cutoff))
+      .collect();
+    for (const job of oldProcessed) {
+      await ctx.db.delete(job._id);
+    }
+
+    // Delete raw jobs by createdAt
+    const oldRaw = await ctx.db
+      .query("rawJobs")
+      .withIndex("by_createdAt", (q) => q.lt("createdAt", cutoff))
+      .collect();
+    for (const item of oldRaw) {
+      await ctx.db.delete(item._id);
+    }
+
+    // Delete sessions by createdAt (after removing related docs)
+    const oldSessions = await ctx.db
+      .query("jobSearchSessions")
+      .withIndex("by_createdAt", (q) => q.lt("createdAt", cutoff))
+      .collect();
+    for (const session of oldSessions) {
+      await ctx.db.delete(session._id);
+    }
+
+    return {
+      processedDeleted: oldProcessed.length,
+      rawDeleted: oldRaw.length,
+      sessionsDeleted: oldSessions.length,
+    };
   },
 });
 

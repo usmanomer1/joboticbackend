@@ -23,7 +23,8 @@ router.post('/match',
     body('query').notEmpty().withMessage('Search query is required'),
     body('resumeText').notEmpty().isLength({ min: 100 }).withMessage('Resume text is required (min 100 chars)'),
     body('location').optional().trim(),
-    body('offset').optional().isInt({ min: 0 }).toInt(),
+    // Prefer cursor-based pagination; keep offset/limit for backward compatibility
+    body('cursor').optional(),
     body('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
     body('sessionId').optional().isString().trim(),
   ]),
@@ -33,30 +34,38 @@ router.post('/match',
         query,
         location,
         resumeText,
-        offset = 0,
         limit = 10,
+        cursor,
         sessionId
       } = req.body;
 
       const userId = req.userId;
 
-      // If continuing a session, return next batch from Convex
+      // If continuing a session, return next page from Convex
       if (sessionId) {
         try {
+          // Verify session ownership
+          const session = await convex.query(api.jobs.getSessionStatus, { sessionId });
+          if (!session) {
+            return res.status(404).json({ success: false, error: 'Session not found' });
+          }
+          if (session.userId !== userId) {
+            return res.status(403).json({ success: false, error: 'Unauthorized' });
+          }
+
           // Get processed jobs from Convex
           const result = await convex.query(api.jobs.getProcessedJobs, {
             sessionId,
-            offset,
-            limit
+            limit,
+            cursor
           });
 
-          if (result && result.jobs.length > 0) {
+          if (result && result.jobs && result.jobs.length > 0) {
             return res.json({
               success: true,
               jobs: result.jobs,
-              total: result.total,
-              offset: offset,
-              hasMore: result.hasMore,
+              cursor: result.cursor,
+              isDone: result.isDone,
               sessionId: sessionId
             });
           }
@@ -132,7 +141,14 @@ router.post('/match',
         });
       }
 
-      // Start background processing
+      // Schedule background processing in Convex (for observability)
+      try {
+        await convex.action(api.jobs.scheduleJobProcessing, { sessionId: newSessionId, startBatch: 1 });
+      } catch (e) {
+        console.warn('Failed to schedule Convex processing action (non-fatal):', e?.message);
+      }
+
+      // Start background processing in backend worker
       processJobsInBackground(newSessionId, allJobs, resumeText);
 
       // Immediately process first batch for instant response
@@ -185,8 +201,7 @@ router.post('/match',
         success: true,
         jobs: matchedFirstBatch,
         total: allJobs.length,
-        offset: 0,
-        hasMore: allJobs.length > limit,
+        // Next page will be available via cursor API on /session endpoint
         sessionId: newSessionId,
         message: `Processing ${allJobs.length} jobs in background...`
       });
@@ -314,8 +329,8 @@ router.get('/session/:sessionId',
   async (req, res) => {
     try {
       const { sessionId } = req.params;
-      const offset = parseInt(req.query.offset) || 0;
       const limit = parseInt(req.query.limit) || 10;
+      const cursor = req.query.cursor ? JSON.parse(req.query.cursor) : undefined;
 
       // Get session status
       const session = await convex.query(api.jobs.getSessionStatus, { sessionId });
@@ -338,8 +353,8 @@ router.get('/session/:sessionId',
       // Get processed jobs
       const result = await convex.query(api.jobs.getProcessedJobs, {
         sessionId,
-        offset,
-        limit
+        limit,
+        cursor
       });
 
       return res.json({
@@ -351,9 +366,8 @@ router.get('/session/:sessionId',
           createdAt: session.createdAt
         },
         jobs: result.jobs,
-        total: result.total,
-        offset: offset,
-        hasMore: result.hasMore
+        cursor: result.cursor,
+        isDone: result.isDone
       });
 
     } catch (error) {
