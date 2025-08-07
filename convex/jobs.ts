@@ -241,6 +241,43 @@ export const purgeOldData = mutation({
   },
 });
 
+// Internal helper shared by purge mutations
+async function purgeOldDataImpl(ctx: any, maxAgeDays: number) {
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+
+  const oldProcessed = await ctx.db
+    .query("processedJobs")
+    .withIndex("by_processedAt", (q: any) => q.lt("processedAt", cutoff))
+    .collect();
+  for (const job of oldProcessed) await ctx.db.delete(job._id);
+
+  const oldRaw = await ctx.db
+    .query("rawJobs")
+    .withIndex("by_createdAt", (q: any) => q.lt("createdAt", cutoff))
+    .collect();
+  for (const item of oldRaw) await ctx.db.delete(item._id);
+
+  const oldSessions = await ctx.db
+    .query("jobSearchSessions")
+    .withIndex("by_createdAt", (q: any) => q.lt("createdAt", cutoff))
+    .collect();
+  for (const session of oldSessions) await ctx.db.delete(session._id);
+
+  return {
+    processedDeleted: oldProcessed.length,
+    rawDeleted: oldRaw.length,
+    sessionsDeleted: oldSessions.length,
+  };
+}
+
+// Cron-safe mutation without args for scheduling
+export const purgeOldDataCron = mutation({
+  args: {},
+  handler: async (ctx) => {
+    return purgeOldDataImpl(ctx, 7);
+  },
+});
+
 // Mutation to update session status
 export const updateSessionStatus = mutation({
   args: {
