@@ -315,3 +315,56 @@ export const scheduleJobProcessing = action({
     return { scheduled: true, sessionId: args.sessionId };
   },
 });
+
+// === Aliases required by frontend ===
+
+// Mutation: jobs:startSession
+// Starts a session owned by the authenticated user. Returns the sessionId.
+export const startSession = mutation({
+  args: {
+    query: v.string(),
+    location: v.optional(v.string()),
+    resumeText: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!ctx.auth?.identity) {
+      throw new Error("Unauthorized: missing identity");
+    }
+    const userId = ctx.auth.identity.subject;
+
+    const sessionId = await ctx.db.insert("jobSearchSessions", {
+      userId,
+      query: args.query,
+      location: args.location,
+      resumeText: args.resumeText,
+      totalJobs: 0, // unknown until search runs
+      processedCount: 0,
+      status: "pending",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+
+    return sessionId;
+  },
+});
+
+// Action: jobs:runSearch
+// Triggers server-side/background search orchestration for an existing session.
+// For now, we simply mark the session as processing to give immediate feedback.
+export const runSearch = action({
+  args: {
+    sessionId: v.id("jobSearchSessions"),
+  },
+  handler: async (ctx, args) => {
+    // Immediately reflect that work is underway
+    await ctx.runMutation(api.jobs.updateSessionStatus, {
+      sessionId: args.sessionId,
+      status: "processing",
+    });
+
+    // This aligns with the existing Express-based worker which does the heavy lifting.
+    // If/when moved fully into Convex, this action can fetch JSearch, run AI, and write results.
+    console.log(`runSearch invoked for session ${args.sessionId}`);
+    return { started: true, sessionId: args.sessionId };
+  },
+});

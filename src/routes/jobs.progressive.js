@@ -115,31 +115,36 @@ router.post('/match',
 
       console.log('Created Convex session:', newSessionId);
 
-      // Store raw jobs in Convex for background processing
+      // Store raw jobs in Convex for background processing (non-blocking)
       const BATCH_SIZE = 10;
-      for (let i = 0; i < allJobs.length; i += BATCH_SIZE) {
-        const batch = allJobs.slice(i, i + BATCH_SIZE);
-        const batchNumber = Math.floor(i / BATCH_SIZE);
-        
-        await convex.mutation('jobs:storeRawJobs', {
-          sessionId: newSessionId,
-          jobs: batch.map(job => ({
-            job_id: job.job_id,
-            job_title: job.job_title,
-            employer_name: job.employer_name,
-            job_city: job.job_city,
-            job_state: job.job_state,
-            job_country: job.job_country,
-            job_description: job.job_description,
-            job_apply_link: job.job_apply_link,
-            employer_logo: job.employer_logo,
-            job_posted_at_datetime_utc: job.job_posted_at_datetime_utc,
-            job_min_salary: job.job_min_salary,
-            job_max_salary: job.job_max_salary
-          })),
-          batchNumber
-        });
-      }
+      setImmediate(async () => {
+        try {
+          for (let i = 0; i < allJobs.length; i += BATCH_SIZE) {
+            const batch = allJobs.slice(i, i + BATCH_SIZE);
+            const batchNumber = Math.floor(i / BATCH_SIZE);
+            await convex.mutation('jobs:storeRawJobs', {
+              sessionId: newSessionId,
+              jobs: batch.map(job => ({
+                job_id: job.job_id,
+                job_title: job.job_title,
+                employer_name: job.employer_name,
+                job_city: job.job_city,
+                job_state: job.job_state,
+                job_country: job.job_country,
+                job_description: job.job_description,
+                job_apply_link: job.job_apply_link,
+                employer_logo: job.employer_logo,
+                job_posted_at_datetime_utc: job.job_posted_at_datetime_utc,
+                job_min_salary: job.job_min_salary,
+                job_max_salary: job.job_max_salary
+              })),
+              batchNumber
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to store raw jobs in background:', e?.message);
+        }
+      });
 
       // Schedule background processing in Convex (for observability)
       try {
@@ -174,18 +179,20 @@ router.post('/match',
         }));
       }
 
-      // Store the processed first batch in Convex
+      // Store the processed first batch in Convex (sanitize optional fields)
       await convex.mutation('jobs:storeProcessedJobs', {
         sessionId: newSessionId,
         jobs: matchedFirstBatch.map(job => ({
           jobId: job.job_id,
           jobTitle: job.job_title,
           company: job.employer_name,
-          location: job.job_city ? `${job.job_city}, ${job.job_state}` : job.job_state,
+          location: job.job_city && job.job_state
+            ? `${job.job_city}, ${job.job_state}`
+            : (typeof job.job_state === 'string' && job.job_state) || undefined,
           description: job.job_description || '',
-          jobUrl: job.job_apply_link,
-          employerLogo: job.employer_logo,
-          postedDate: job.job_posted_at_datetime_utc,
+          jobUrl: typeof job.job_apply_link === 'string' ? job.job_apply_link : '',
+          employerLogo: typeof job.employer_logo === 'string' && job.employer_logo ? job.employer_logo : undefined,
+          postedDate: typeof job.job_posted_at_datetime_utc === 'string' ? job.job_posted_at_datetime_utc : undefined,
           salaryMin: typeof job.job_min_salary === 'number' ? job.job_min_salary : undefined,
           salaryMax: typeof job.job_max_salary === 'number' ? job.job_max_salary : undefined,
           matchScore: job.match_score,
@@ -253,18 +260,20 @@ async function processJobsInBackground(sessionId, jobs, resumeText) {
         // Process through Gemini AI
         const matchedBatch = await aiMatchingService.matchJobsToResume(batch, resumeText);
         
-        // Store in Convex
+        // Store in Convex (sanitize optional fields)
         await convex.mutation('jobs:storeProcessedJobs', {
           sessionId,
           jobs: matchedBatch.map(job => ({
             jobId: job.job_id,
             jobTitle: job.job_title,
             company: job.employer_name,
-            location: job.job_city ? `${job.job_city}, ${job.job_state}` : job.job_state,
+            location: job.job_city && job.job_state
+              ? `${job.job_city}, ${job.job_state}`
+              : (typeof job.job_state === 'string' && job.job_state) || undefined,
             description: job.job_description || '',
-            jobUrl: job.job_apply_link,
-            employerLogo: job.employer_logo,
-            postedDate: job.job_posted_at_datetime_utc,
+            jobUrl: typeof job.job_apply_link === 'string' ? job.job_apply_link : '',
+            employerLogo: typeof job.employer_logo === 'string' && job.employer_logo ? job.employer_logo : undefined,
+            postedDate: typeof job.job_posted_at_datetime_utc === 'string' ? job.job_posted_at_datetime_utc : undefined,
             salaryMin: typeof job.job_min_salary === 'number' ? job.job_min_salary : undefined,
             salaryMax: typeof job.job_max_salary === 'number' ? job.job_max_salary : undefined,
             matchScore: job.match_score,
@@ -285,13 +294,15 @@ async function processJobsInBackground(sessionId, jobs, resumeText) {
           jobId: job.job_id,
           jobTitle: job.job_title,
           company: job.employer_name,
-          location: job.job_city ? `${job.job_city}, ${job.job_state}` : job.job_state,
+          location: job.job_city && job.job_state
+            ? `${job.job_city}, ${job.job_state}`
+            : (typeof job.job_state === 'string' && job.job_state) || undefined,
           description: job.job_description || '',
-          jobUrl: job.job_apply_link,
-          employerLogo: job.employer_logo,
-          postedDate: job.job_posted_at_datetime_utc,
-          salaryMin: job.job_min_salary,
-          salaryMax: job.job_max_salary,
+          jobUrl: typeof job.job_apply_link === 'string' ? job.job_apply_link : '',
+          employerLogo: typeof job.employer_logo === 'string' && job.employer_logo ? job.employer_logo : undefined,
+          postedDate: typeof job.job_posted_at_datetime_utc === 'string' ? job.job_posted_at_datetime_utc : undefined,
+          salaryMin: typeof job.job_min_salary === 'number' ? job.job_min_salary : undefined,
+          salaryMax: typeof job.job_max_salary === 'number' ? job.job_max_salary : undefined,
           matchScore: 50,
           matchLabel: 'ERROR',
           matchReasons: ['Processing failed'],
