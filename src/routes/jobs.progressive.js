@@ -10,7 +10,7 @@ const { authenticateSupabaseUser } = require('../middleware/supabaseAuth');
 const jobSearchService = require('../services/jobSearch.service');
 const aiMatchingService = require('../services/aiMatching.service');
 const { convex } = require('../services/convexClient');
-const { api } = require('../../convex/_generated/api');
+// Avoid importing ESM Convex generated API in CJS runtime; use string function references instead
 
 /**
  * @route   POST /api/jobs/match
@@ -23,7 +23,8 @@ router.post('/match',
     body('query').notEmpty().withMessage('Search query is required'),
     body('resumeText').notEmpty().isLength({ min: 100 }).withMessage('Resume text is required (min 100 chars)'),
     body('location').optional().trim(),
-    body('offset').optional().isInt({ min: 0 }).toInt(),
+    // Prefer cursor-based pagination; keep offset/limit for backward compatibility
+    body('cursor').optional(),
     body('limit').optional().isInt({ min: 1, max: 100 }).toInt(),
     body('sessionId').optional().isString().trim(),
   ]),
@@ -33,30 +34,38 @@ router.post('/match',
         query,
         location,
         resumeText,
-        offset = 0,
         limit = 10,
+        cursor,
         sessionId
       } = req.body;
 
       const userId = req.userId;
 
-      // If continuing a session, return next batch from Convex
+      // If continuing a session, return next page from Convex
       if (sessionId) {
         try {
+          // Verify session ownership
+          const session = await convex.query('jobs:getSessionStatus', { sessionId });
+          if (!session) {
+            return res.status(404).json({ success: false, error: 'Session not found' });
+          }
+          if (session.userId !== userId) {
+            return res.status(403).json({ success: false, error: 'Unauthorized' });
+          }
+
           // Get processed jobs from Convex
-          const result = await convex.query(api.jobs.getProcessedJobs, {
+          const result = await convex.query('jobs:getProcessedJobs', {
             sessionId,
-            offset,
-            limit
+            limit,
+            cursor
           });
 
-          if (result && result.jobs.length > 0) {
+          if (result && result.jobs && result.jobs.length > 0) {
             return res.json({
               success: true,
               jobs: result.jobs,
-              total: result.total,
-              offset: offset,
-              hasMore: result.hasMore,
+              cursor: result.cursor,
+              isDone: result.isDone,
               sessionId: sessionId
             });
           }
@@ -96,7 +105,7 @@ router.post('/match',
       }
 
       // Create a new session in Convex
-      const newSessionId = await convex.mutation(api.jobs.createJobSearchSession, {
+      const newSessionId = await convex.mutation('jobs:createJobSearchSession', {
         userId,
         query,
         location,
@@ -106,33 +115,45 @@ router.post('/match',
 
       console.log('Created Convex session:', newSessionId);
 
-      // Store raw jobs in Convex for background processing
+      // Store raw jobs in Convex for background processing (non-blocking)
       const BATCH_SIZE = 10;
-      for (let i = 0; i < allJobs.length; i += BATCH_SIZE) {
-        const batch = allJobs.slice(i, i + BATCH_SIZE);
-        const batchNumber = Math.floor(i / BATCH_SIZE);
-        
-        await convex.mutation(api.jobs.storeRawJobs, {
-          sessionId: newSessionId,
-          jobs: batch.map(job => ({
-            job_id: job.job_id,
-            job_title: job.job_title,
-            employer_name: job.employer_name,
-            job_city: job.job_city,
-            job_state: job.job_state,
-            job_country: job.job_country,
-            job_description: job.job_description,
-            job_apply_link: job.job_apply_link,
-            employer_logo: job.employer_logo,
-            job_posted_at_datetime_utc: job.job_posted_at_datetime_utc,
-            job_min_salary: job.job_min_salary,
-            job_max_salary: job.job_max_salary
-          })),
-          batchNumber
-        });
+      setImmediate(async () => {
+        try {
+          for (let i = 0; i < allJobs.length; i += BATCH_SIZE) {
+            const batch = allJobs.slice(i, i + BATCH_SIZE);
+            const batchNumber = Math.floor(i / BATCH_SIZE);
+            await convex.mutation('jobs:storeRawJobs', {
+              sessionId: newSessionId,
+              jobs: batch.map(job => ({
+                job_id: job.job_id,
+                job_title: job.job_title,
+                employer_name: job.employer_name,
+                job_city: job.job_city,
+                job_state: job.job_state,
+                job_country: job.job_country,
+                job_description: job.job_description,
+                job_apply_link: job.job_apply_link,
+                employer_logo: job.employer_logo,
+                job_posted_at_datetime_utc: job.job_posted_at_datetime_utc,
+                job_min_salary: job.job_min_salary,
+                job_max_salary: job.job_max_salary
+              })),
+              batchNumber
+            });
+          }
+        } catch (e) {
+          console.warn('Failed to store raw jobs in background:', e?.message);
+        }
+      });
+
+      // Schedule background processing in Convex (for observability)
+      try {
+        await convex.action('jobs:scheduleJobProcessing', { sessionId: newSessionId, startBatch: 1 });
+      } catch (e) {
+        console.warn('Failed to schedule Convex processing action (non-fatal):', e?.message);
       }
 
-      // Start background processing
+      // Start background processing in backend worker
       processJobsInBackground(newSessionId, allJobs, resumeText);
 
       // Immediately process first batch for instant response
@@ -158,20 +179,22 @@ router.post('/match',
         }));
       }
 
-      // Store the processed first batch in Convex
-      await convex.mutation(api.jobs.storeProcessedJobs, {
+      // Store the processed first batch in Convex (sanitize optional fields)
+      await convex.mutation('jobs:storeProcessedJobs', {
         sessionId: newSessionId,
         jobs: matchedFirstBatch.map(job => ({
           jobId: job.job_id,
           jobTitle: job.job_title,
           company: job.employer_name,
-          location: job.job_city ? `${job.job_city}, ${job.job_state}` : job.job_state,
+          location: job.job_city && job.job_state
+            ? `${job.job_city}, ${job.job_state}`
+            : (typeof job.job_state === 'string' && job.job_state) || undefined,
           description: job.job_description || '',
-          jobUrl: job.job_apply_link,
-          employerLogo: job.employer_logo,
-          postedDate: job.job_posted_at_datetime_utc,
-          salaryMin: job.job_min_salary,
-          salaryMax: job.job_max_salary,
+          jobUrl: typeof job.job_apply_link === 'string' ? job.job_apply_link : '',
+          employerLogo: typeof job.employer_logo === 'string' && job.employer_logo ? job.employer_logo : undefined,
+          postedDate: typeof job.job_posted_at_datetime_utc === 'string' ? job.job_posted_at_datetime_utc : undefined,
+          salaryMin: typeof job.job_min_salary === 'number' ? job.job_min_salary : undefined,
+          salaryMax: typeof job.job_max_salary === 'number' ? job.job_max_salary : undefined,
           matchScore: job.match_score,
           matchLabel: job.match_label,
           matchReasons: job.match_reasons,
@@ -185,8 +208,7 @@ router.post('/match',
         success: true,
         jobs: matchedFirstBatch,
         total: allJobs.length,
-        offset: 0,
-        hasMore: allJobs.length > limit,
+        // Next page will be available via cursor API on /session endpoint
         sessionId: newSessionId,
         message: `Processing ${allJobs.length} jobs in background...`
       });
@@ -238,20 +260,22 @@ async function processJobsInBackground(sessionId, jobs, resumeText) {
         // Process through Gemini AI
         const matchedBatch = await aiMatchingService.matchJobsToResume(batch, resumeText);
         
-        // Store in Convex
-        await convex.mutation(api.jobs.storeProcessedJobs, {
+        // Store in Convex (sanitize optional fields)
+        await convex.mutation('jobs:storeProcessedJobs', {
           sessionId,
           jobs: matchedBatch.map(job => ({
             jobId: job.job_id,
             jobTitle: job.job_title,
             company: job.employer_name,
-            location: job.job_city ? `${job.job_city}, ${job.job_state}` : job.job_state,
+            location: job.job_city && job.job_state
+              ? `${job.job_city}, ${job.job_state}`
+              : (typeof job.job_state === 'string' && job.job_state) || undefined,
             description: job.job_description || '',
-            jobUrl: job.job_apply_link,
-            employerLogo: job.employer_logo,
-            postedDate: job.job_posted_at_datetime_utc,
-            salaryMin: job.job_min_salary,
-            salaryMax: job.job_max_salary,
+            jobUrl: typeof job.job_apply_link === 'string' ? job.job_apply_link : '',
+            employerLogo: typeof job.employer_logo === 'string' && job.employer_logo ? job.employer_logo : undefined,
+            postedDate: typeof job.job_posted_at_datetime_utc === 'string' ? job.job_posted_at_datetime_utc : undefined,
+            salaryMin: typeof job.job_min_salary === 'number' ? job.job_min_salary : undefined,
+            salaryMax: typeof job.job_max_salary === 'number' ? job.job_max_salary : undefined,
             matchScore: job.match_score,
             matchLabel: job.match_label,
             matchReasons: job.match_reasons,
@@ -270,13 +294,15 @@ async function processJobsInBackground(sessionId, jobs, resumeText) {
           jobId: job.job_id,
           jobTitle: job.job_title,
           company: job.employer_name,
-          location: job.job_city ? `${job.job_city}, ${job.job_state}` : job.job_state,
+          location: job.job_city && job.job_state
+            ? `${job.job_city}, ${job.job_state}`
+            : (typeof job.job_state === 'string' && job.job_state) || undefined,
           description: job.job_description || '',
-          jobUrl: job.job_apply_link,
-          employerLogo: job.employer_logo,
-          postedDate: job.job_posted_at_datetime_utc,
-          salaryMin: job.job_min_salary,
-          salaryMax: job.job_max_salary,
+          jobUrl: typeof job.job_apply_link === 'string' ? job.job_apply_link : '',
+          employerLogo: typeof job.employer_logo === 'string' && job.employer_logo ? job.employer_logo : undefined,
+          postedDate: typeof job.job_posted_at_datetime_utc === 'string' ? job.job_posted_at_datetime_utc : undefined,
+          salaryMin: typeof job.job_min_salary === 'number' ? job.job_min_salary : undefined,
+          salaryMax: typeof job.job_max_salary === 'number' ? job.job_max_salary : undefined,
           matchScore: 50,
           matchLabel: 'ERROR',
           matchReasons: ['Processing failed'],
@@ -284,7 +310,7 @@ async function processJobsInBackground(sessionId, jobs, resumeText) {
           keyStrengths: []
         }));
         
-        await convex.mutation(api.jobs.storeProcessedJobs, {
+        await convex.mutation('jobs:storeProcessedJobs', {
           sessionId,
           jobs: fallbackBatch,
           batchNumber
@@ -314,11 +340,11 @@ router.get('/session/:sessionId',
   async (req, res) => {
     try {
       const { sessionId } = req.params;
-      const offset = parseInt(req.query.offset) || 0;
       const limit = parseInt(req.query.limit) || 10;
+      const cursor = req.query.cursor ? JSON.parse(req.query.cursor) : undefined;
 
       // Get session status
-      const session = await convex.query(api.jobs.getSessionStatus, { sessionId });
+      const session = await convex.query('jobs:getSessionStatus', { sessionId });
       
       if (!session) {
         return res.status(404).json({
@@ -336,10 +362,10 @@ router.get('/session/:sessionId',
       }
 
       // Get processed jobs
-      const result = await convex.query(api.jobs.getProcessedJobs, {
+      const result = await convex.query('jobs:getProcessedJobs', {
         sessionId,
-        offset,
-        limit
+        limit,
+        cursor
       });
 
       return res.json({
@@ -351,9 +377,8 @@ router.get('/session/:sessionId',
           createdAt: session.createdAt
         },
         jobs: result.jobs,
-        total: result.total,
-        offset: offset,
-        hasMore: result.hasMore
+        cursor: result.cursor,
+        isDone: result.isDone
       });
 
     } catch (error) {

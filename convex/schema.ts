@@ -19,7 +19,10 @@ export default defineSchema({
     error: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
-  }).index("by_user", ["userId"]),
+    // Optional: TTL for future auto-expiry if using Convex cron to purge
+  })
+    .index("by_user", ["userId"]) 
+    .index("by_createdAt", ["createdAt"]),
 
   // Processed jobs with AI matching scores
   processedJobs: defineTable({
@@ -35,6 +38,8 @@ export default defineSchema({
     salaryMin: v.optional(v.number()),
     salaryMax: v.optional(v.number()),
     matchScore: v.optional(v.number()),
+    // Precomputed negative score to enable indexed sorting by highest score first
+    matchScoreNeg: v.optional(v.number()),
     matchLabel: v.optional(v.string()),
     matchReasons: v.optional(v.array(v.string())),
     missingSkills: v.optional(v.array(v.string())),
@@ -43,7 +48,10 @@ export default defineSchema({
     batchNumber: v.number(),
   })
     .index("by_session", ["sessionId"])
-    .index("by_session_and_batch", ["sessionId", "batchNumber"]),
+    .index("by_session_and_batch", ["sessionId", "batchNumber"]) 
+    // Enables efficient pagination by highest match score using matchScoreNeg asc
+    .index("by_session_score", ["sessionId", "matchScoreNeg", "processedAt"]) 
+    .index("by_processedAt", ["processedAt"]),
 
   // Raw jobs from JSearch API (before AI processing)
   rawJobs: defineTable({
@@ -51,5 +59,7 @@ export default defineSchema({
     jobData: v.any(), // Store raw job data from JSearch
     batchNumber: v.number(),
     createdAt: v.number(),
-  }).index("by_session", ["sessionId"]),
+  })
+    .index("by_session", ["sessionId"]) 
+    .index("by_createdAt", ["createdAt"]),
 });
