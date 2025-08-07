@@ -186,8 +186,8 @@ router.post('/match',
           jobUrl: job.job_apply_link,
           employerLogo: job.employer_logo,
           postedDate: job.job_posted_at_datetime_utc,
-          salaryMin: job.job_min_salary,
-          salaryMax: job.job_max_salary,
+          salaryMin: typeof job.job_min_salary === 'number' ? job.job_min_salary : undefined,
+          salaryMax: typeof job.job_max_salary === 'number' ? job.job_max_salary : undefined,
           matchScore: job.match_score,
           matchLabel: job.match_label,
           matchReasons: job.match_reasons,
@@ -254,7 +254,7 @@ async function processJobsInBackground(sessionId, jobs, resumeText) {
         const matchedBatch = await aiMatchingService.matchJobsToResume(batch, resumeText);
         
         // Store in Convex
-        await convex.mutation(api.jobs.storeProcessedJobs, {
+        await convex.mutation('jobs:storeProcessedJobs', {
           sessionId,
           jobs: matchedBatch.map(job => ({
             jobId: job.job_id,
@@ -265,8 +265,8 @@ async function processJobsInBackground(sessionId, jobs, resumeText) {
             jobUrl: job.job_apply_link,
             employerLogo: job.employer_logo,
             postedDate: job.job_posted_at_datetime_utc,
-            salaryMin: job.job_min_salary,
-            salaryMax: job.job_max_salary,
+            salaryMin: typeof job.job_min_salary === 'number' ? job.job_min_salary : undefined,
+            salaryMax: typeof job.job_max_salary === 'number' ? job.job_max_salary : undefined,
             matchScore: job.match_score,
             matchLabel: job.match_label,
             matchReasons: job.match_reasons,
@@ -299,7 +299,7 @@ async function processJobsInBackground(sessionId, jobs, resumeText) {
           keyStrengths: []
         }));
         
-        await convex.mutation(api.jobs.storeProcessedJobs, {
+        await convex.mutation('jobs:storeProcessedJobs', {
           sessionId,
           jobs: fallbackBatch,
           batchNumber
