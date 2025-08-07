@@ -10,7 +10,7 @@ const { authenticateSupabaseUser } = require('../middleware/supabaseAuth');
 const jobSearchService = require('../services/jobSearch.service');
 const aiMatchingService = require('../services/aiMatching.service');
 const { convex } = require('../services/convexClient');
-const { api } = require('../../convex/_generated/api');
+// Avoid importing ESM Convex generated API in CJS runtime; use string function references instead
 
 /**
  * @route   POST /api/jobs/match
@@ -45,7 +45,7 @@ router.post('/match',
       if (sessionId) {
         try {
           // Verify session ownership
-          const session = await convex.query(api.jobs.getSessionStatus, { sessionId });
+          const session = await convex.query('jobs:getSessionStatus', { sessionId });
           if (!session) {
             return res.status(404).json({ success: false, error: 'Session not found' });
           }
@@ -54,7 +54,7 @@ router.post('/match',
           }
 
           // Get processed jobs from Convex
-          const result = await convex.query(api.jobs.getProcessedJobs, {
+          const result = await convex.query('jobs:getProcessedJobs', {
             sessionId,
             limit,
             cursor
@@ -105,7 +105,7 @@ router.post('/match',
       }
 
       // Create a new session in Convex
-      const newSessionId = await convex.mutation(api.jobs.createJobSearchSession, {
+      const newSessionId = await convex.mutation('jobs:createJobSearchSession', {
         userId,
         query,
         location,
@@ -121,7 +121,7 @@ router.post('/match',
         const batch = allJobs.slice(i, i + BATCH_SIZE);
         const batchNumber = Math.floor(i / BATCH_SIZE);
         
-        await convex.mutation(api.jobs.storeRawJobs, {
+        await convex.mutation('jobs:storeRawJobs', {
           sessionId: newSessionId,
           jobs: batch.map(job => ({
             job_id: job.job_id,
@@ -143,7 +143,7 @@ router.post('/match',
 
       // Schedule background processing in Convex (for observability)
       try {
-        await convex.action(api.jobs.scheduleJobProcessing, { sessionId: newSessionId, startBatch: 1 });
+        await convex.action('jobs:scheduleJobProcessing', { sessionId: newSessionId, startBatch: 1 });
       } catch (e) {
         console.warn('Failed to schedule Convex processing action (non-fatal):', e?.message);
       }
@@ -175,7 +175,7 @@ router.post('/match',
       }
 
       // Store the processed first batch in Convex
-      await convex.mutation(api.jobs.storeProcessedJobs, {
+      await convex.mutation('jobs:storeProcessedJobs', {
         sessionId: newSessionId,
         jobs: matchedFirstBatch.map(job => ({
           jobId: job.job_id,
@@ -333,7 +333,7 @@ router.get('/session/:sessionId',
       const cursor = req.query.cursor ? JSON.parse(req.query.cursor) : undefined;
 
       // Get session status
-      const session = await convex.query(api.jobs.getSessionStatus, { sessionId });
+      const session = await convex.query('jobs:getSessionStatus', { sessionId });
       
       if (!session) {
         return res.status(404).json({
@@ -351,7 +351,7 @@ router.get('/session/:sessionId',
       }
 
       // Get processed jobs
-      const result = await convex.query(api.jobs.getProcessedJobs, {
+      const result = await convex.query('jobs:getProcessedJobs', {
         sessionId,
         limit,
         cursor
