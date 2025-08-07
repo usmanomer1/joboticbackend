@@ -14,6 +14,7 @@ const { requestIdMiddleware } = require('./src/middleware/requestId');
 
 // Import routes
 const jobRoutes = require('./src/routes/jobs.routes');
+const progressiveJobRoutes = require('./src/routes/jobs.progressive');
 
 // Import services for validation
 const geminiClient = require('./src/utils/geminiClient');
@@ -172,7 +173,9 @@ if (process.env.NODE_ENV !== 'production') {
 app.use('/api/jobs', authenticateApiKey);
 
 // 8. Mount API routes
-app.use('/api/jobs', jobRoutes);
+// Use the new progressive routes for /match endpoint
+app.use('/api/v2/jobs', progressiveJobRoutes); // New progressive endpoints
+app.use('/api/jobs', jobRoutes); // Keep old routes for compatibility
 
 // 9. 404 handler (after all routes)
 app.use(notFoundHandler);
