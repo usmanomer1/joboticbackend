@@ -546,64 +546,102 @@ RULES:
    * @returns {Promise<Array>} Jobs with enhanced AI analysis
    */
   async enhancedAnalysis(jobs, resumeText) {
-    const prompt = `
-      Analyze these jobs against resume for deep matching.
+    console.log(`Starting enhanced analysis for ${jobs.length} jobs`);
+    
+    // Process in smaller batches for enhanced analysis
+    const ENHANCED_BATCH_SIZE = 3; // Smaller batches for detailed analysis
+    const enhancedResults = [];
+    
+    // Truncate resume for large job sets
+    const resumeTruncated = resumeText.substring(0, 1500);
+    
+    for (let i = 0; i < jobs.length; i += ENHANCED_BATCH_SIZE) {
+      const batch = jobs.slice(i, i + ENHANCED_BATCH_SIZE);
+      console.log(`Processing enhanced batch ${Math.floor(i/ENHANCED_BATCH_SIZE) + 1}/${Math.ceil(jobs.length/ENHANCED_BATCH_SIZE)}`);
       
-      RESUME: ${resumeText}
+      const prompt = `Analyze these ${batch.length} jobs against the resume for comprehensive matching.
       
-      JOBS: ${JSON.stringify(jobs.map(job => ({
-        title: job.job_title,
-        company: job.employer_name,
-        description: job.job_description,
-        
-        // Use JSearch's structured data
-        qualifications: job.job_highlights?.Qualifications,
-        responsibilities: job.job_highlights?.Responsibilities,
-        benefits: job.job_highlights?.Benefits,
-        
-        required_experience: job.job_required_experience,
-        required_skills: job.job_required_skills,
-        
-        // Career complexity
-        job_zone: job.job_onet_job_zone,
-        onet_soc: job.job_onet_soc,
-        
-        // Quality signals
-        expires: job.job_offer_expiration_timestamp,
-        quality_score: job.job_apply_quality_score,
-        is_direct: job.job_apply_is_direct,
-      })))}
-      
-      For each job:
-      1. match_score (1-100)
-      2. full_analysis (paragraph)
-      3. resume_improvements (array)
-      4. gaps_analysis (object)
-      5. missing_skills (array)
-      6. matching_skills (array)
-      7. strengths_for_role (array)
-      8. red_flags (array)
-      9. application_strategy (based on quality_score and is_direct)
-      
-      Return JSON array.
-    `;
+RESUME (key skills and experience):
+${resumeTruncated}
 
-    try {
-      const response = await geminiClient.generateJSON(prompt, {
-        temperature: 0.7,
-        maxOutputTokens: 4096
-      });
+JOBS TO ANALYZE:
+${batch.map((job, idx) => `
+Job ${idx + 1}: ${job.job_title} at ${job.employer_name}
+Description: ${(job.job_description || '').substring(0, 500)}
+Required Skills: ${(job.job_required_skills || []).join(', ')}
+Qualifications: ${(job.job_highlights?.Qualifications || []).slice(0, 3).join('; ')}
+Apply Quality Score: ${job.job_apply_quality_score || 'N/A'}
+`).join('\n')}
+
+For each job, provide a JSON array with:
+- match_score: 1-100 based on fit
+- match_analysis: Brief explanation of fit (2-3 sentences)
+- top_matching_skills: Array of 3-5 matching skills
+- missing_skills: Array of 3-5 missing skills
+- recommendation: "Strong Apply", "Apply", "Consider", or "Skip"
+
+Return ONLY a JSON array with ${batch.length} objects. No markdown, no extra text.
+Example: [{"match_score": 85, "match_analysis": "...", "top_matching_skills": [...], "missing_skills": [...], "recommendation": "Apply"}]`;
+
+      try {
+        const response = await geminiClient.generateJSON(prompt, {
+          temperature: 0.5, // Lower temperature for more consistent JSON
+          maxOutputTokens: 2048 // Smaller output for reliability
+        });
+        
+        // Handle both array and single object responses
+        const results = Array.isArray(response) ? response : [response];
+        
+        // Merge enhanced analysis with original job data
+        batch.forEach((job, index) => {
+          const analysis = results[index] || {};
+          enhancedResults.push({
+            ...job,
+            match_score: analysis.match_score || 50,
+            match_analysis: analysis.match_analysis || 'Analysis pending',
+            top_matching_skills: analysis.top_matching_skills || [],
+            missing_skills: analysis.missing_skills || [],
+            recommendation: analysis.recommendation || 'Consider',
+            // Keep backward compatibility
+            match_label: this.calculateMatchLabel(analysis.match_score || 50),
+            match_reasons: analysis.match_analysis ? [analysis.match_analysis] : [],
+            key_strengths: analysis.top_matching_skills || []
+          });
+        });
+        
+      } catch (error) {
+        console.error(`Enhanced batch failed: ${error.message}`);
+        // Use basic matching as fallback for this batch
+        try {
+          const basicMatches = await this.matchJobsToResume(batch, resumeText);
+          enhancedResults.push(...basicMatches);
+        } catch (fallbackError) {
+          // Last resort - add jobs with minimal scoring
+          batch.forEach(job => {
+            enhancedResults.push({
+              ...job,
+              match_score: 50,
+              match_label: 'ANALYSIS FAILED',
+              match_reasons: ['Unable to analyze - showing job anyway'],
+              missing_skills: [],
+              key_strengths: []
+            });
+          });
+        }
+      }
       
-      // Merge AI results with original job data
-      return jobs.map((job, index) => ({
-        ...job, // All JSearch fields
-        ...(response[index] || {}), // AI enhancements
-      }));
-    } catch (error) {
-      console.error('Enhanced analysis failed:', error);
-      // Fallback to basic matching
-      return this.matchJobsToResume(jobs, resumeText);
+      // Small delay between batches to avoid rate limiting
+      if (i + ENHANCED_BATCH_SIZE < jobs.length) {
+        await this.sleep(200);
+      }
     }
+    
+    return enhancedResults;
+  }
+  
+  // Add sleep helper
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   /**
