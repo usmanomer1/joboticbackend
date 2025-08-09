@@ -114,14 +114,17 @@ router.post('/match',
       filters = {},
       numJobs = 100,
       callbackUrl,  // NEW: Client provides their callback URL
+      sessionId,    // NEW: Accept sessionId from Convex
       userId // Optional, just for logging
     } = req.body;
 
-    const sessionId = generateSessionId();
+    // Use provided sessionId or generate one if not provided (for backward compatibility)
+    const finalSessionId = sessionId || generateSessionId();
     const requestId = req.id || 'no-request-id';
     
-    console.log(`[${requestId}] New job search request - Session: ${sessionId}`);
+    console.log(`[${requestId}] New job search request - Session: ${finalSessionId}`);
     console.log(`[${requestId}] User: ${userId || 'anonymous'}, Callback: ${callbackUrl ? 'Yes' : 'No'}`);
+    console.log(`[${requestId}] Using ${sessionId ? 'provided' : 'generated'} sessionId`);
 
     try {
       // Build search query
@@ -156,7 +159,7 @@ router.post('/match',
       // Return IMMEDIATELY with session info
       const immediateResponse = {
         success: true,
-        sessionId,
+        sessionId: finalSessionId,  // Use the final sessionId
         totalFound: jobs.length,
         searchMetadata: {
           query: searchQuery,
@@ -182,12 +185,12 @@ router.post('/match',
       // Process jobs in background if callback URL is provided
       if (callbackUrl && jobs.length > 0) {
         // Don't await - let it run in background
-        processJobsInBackground(sessionId, jobs, resumeText, callbackUrl, userId)
+        processJobsInBackground(finalSessionId, jobs, resumeText, callbackUrl, userId)
           .then(() => {
-            console.log(`[${sessionId}] Background processing completed successfully`);
+            console.log(`[${finalSessionId}] Background processing completed successfully`);
           })
           .catch(error => {
-            console.error(`[${sessionId}] Background processing failed:`, error.message);
+            console.error(`[${finalSessionId}] Background processing failed:`, error.message);
           });
       } else if (!callbackUrl && jobs.length > 0) {
         // If no callback URL, process first 10 synchronously and return
