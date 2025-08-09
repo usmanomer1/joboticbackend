@@ -540,6 +540,73 @@ RULES:
   }
   
   /**
+   * Enhanced analysis using JSearch's structured data
+   * @param {Array} jobs - Jobs to analyze
+   * @param {string} resumeText - Resume text
+   * @returns {Promise<Array>} Jobs with enhanced AI analysis
+   */
+  async enhancedAnalysis(jobs, resumeText) {
+    const prompt = `
+      Analyze these jobs against resume for deep matching.
+      
+      RESUME: ${resumeText}
+      
+      JOBS: ${JSON.stringify(jobs.map(job => ({
+        title: job.job_title,
+        company: job.employer_name,
+        description: job.job_description,
+        
+        // Use JSearch's structured data
+        qualifications: job.job_highlights?.Qualifications,
+        responsibilities: job.job_highlights?.Responsibilities,
+        benefits: job.job_highlights?.Benefits,
+        
+        required_experience: job.job_required_experience,
+        required_skills: job.job_required_skills,
+        
+        // Career complexity
+        job_zone: job.job_onet_job_zone,
+        onet_soc: job.job_onet_soc,
+        
+        // Quality signals
+        expires: job.job_offer_expiration_timestamp,
+        quality_score: job.job_apply_quality_score,
+        is_direct: job.job_apply_is_direct,
+      })))}
+      
+      For each job:
+      1. match_score (1-100)
+      2. full_analysis (paragraph)
+      3. resume_improvements (array)
+      4. gaps_analysis (object)
+      5. missing_skills (array)
+      6. matching_skills (array)
+      7. strengths_for_role (array)
+      8. red_flags (array)
+      9. application_strategy (based on quality_score and is_direct)
+      
+      Return JSON array.
+    `;
+
+    try {
+      const response = await geminiClient.generateJSON(prompt, {
+        temperature: 0.7,
+        maxOutputTokens: 4096
+      });
+      
+      // Merge AI results with original job data
+      return jobs.map((job, index) => ({
+        ...job, // All JSearch fields
+        ...(response[index] || {}), // AI enhancements
+      }));
+    } catch (error) {
+      console.error('Enhanced analysis failed:', error);
+      // Fallback to basic matching
+      return this.matchJobsToResume(jobs, resumeText);
+    }
+  }
+
+  /**
    * Get match statistics from enriched jobs
    * @param {Array} enrichedJobs - Jobs with match scores
    * @returns {Object} Statistics object
