@@ -100,9 +100,13 @@ class JobSearchService {
       const requestParams = {
         query: params.query,
         page: 1,
-        num_pages: 1,
-        country: params.country || 'us'
+        num_pages: 1
       };
+      
+      // Add country only if explicitly provided
+      if (params.country) {
+        requestParams.country = params.country;
+      }
       
       // Add location if provided
       if (params.location && params.location.trim()) {
@@ -229,7 +233,7 @@ class JobSearchService {
    * @param {boolean} params.remote_jobs_only - Remote only filter
    * @param {string[]} params.employment_types - Employment type filters
    * @param {string[]} params.job_requirements - Experience/degree requirements
-   * @param {string} params.country - Country code (default: 'us')
+   * @param {string} params.country - Country code (optional, JSearch will auto-detect from location/query)
    * @returns {Promise<Object>} Search results
    */
   async searchJobs(params) {
@@ -258,9 +262,13 @@ class JobSearchService {
       const requestParams = {
         query: params.query,
         page: params.page || 1,
-        num_pages: params.num_pages || 1,
-        country: params.country || 'us'
+        num_pages: params.num_pages || 1
       };
+      
+      // Add country only if explicitly provided
+      if (params.country) {
+        requestParams.country = params.country;
+      }
       
       // Add location if provided separately
       if (params.location && params.location.trim()) {
@@ -384,10 +392,10 @@ class JobSearchService {
   /**
    * Get detailed job information
    * @param {string} jobId - JSearch job ID
-   * @param {string} country - Country code (default: 'us')
+   * @param {string} country - Country code (optional)
    * @returns {Promise<Object>} Job details
    */
-  async getJobDetails(jobId, country = 'us') {
+  async getJobDetails(jobId, country) {
     try {
       // Check cache first
       const cacheKey = cache.makeKey('jobs:details', jobId, country);
@@ -398,14 +406,21 @@ class JobSearchService {
         return cachedData;
       }
       
+      // Build params
+      const requestParams = {
+        job_id: jobId
+      };
+      
+      // Add country only if provided
+      if (country) {
+        requestParams.country = country;
+      }
+      
       // Execute request with retry
       const response = await executeWithRetry(() =>
         axios.get(`${JSEARCH_BASE_URL}/job-details`, {
           headers: JSEARCH_HEADERS,
-          params: {
-            job_id: jobId,
-            country: country
-          }
+          params: requestParams
         })
       );
       
