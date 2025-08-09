@@ -65,12 +65,18 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
+    // Log the origin for debugging
+    console.log('CORS check - Request origin:', origin);
+    
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
     if (allowedOrigins.includes(origin)) {
+      console.log('✅ CORS allowed for:', origin);
       callback(null, true);
     } else {
+      console.log('❌ CORS blocked for:', origin);
+      console.log('Allowed origins:', allowedOrigins);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -169,8 +175,8 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-// 7. API Authentication (for protected routes)
-app.use('/api/jobs', authenticateApiKey);
+// 7. API Authentication - REMOVED for /api/jobs routes
+// app.use('/api/jobs', authenticateApiKey);  // Commented out - no auth needed
 
 // 8. Mount API routes
 app.use('/api/jobs', jobRoutes);
