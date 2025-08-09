@@ -60,7 +60,7 @@ const allowedOrigins = [
   'https://portal.jobotic.ai',
   'https://jobotic.ai',
   'https://www.jobotic.ai',
-  'https://notable-sloth-598.convex.cloud'  // Convex deployment
+  'https://veracious-meadowlark-646.convex.cloud'  // Convex deployment
 ];
 
 app.use(cors({
