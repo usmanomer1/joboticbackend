@@ -30,7 +30,8 @@ app.use((req, res, next) => {
 });
 
 // Trust proxy if behind reverse proxy (for rate limiting)
-if (process.env.NODE_ENV === 'production') {
+// Enable for ngrok and production environments
+if (process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'development') {
   app.set('trust proxy', 1);
 }
 
