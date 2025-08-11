@@ -1,5 +1,7 @@
 # LinkedIn Automation Controller
 
+> Important: This module is not mounted in `server.js` by default. The Supabase JWT requirements described here apply only if you integrate and mount `linkedinAutomation.routes.ts`. The running API mounted at `/api/jobs` does not require Supabase auth by default.
+
 This controller provides a REST API that matches Browser Use's interface exactly for seamless frontend compatibility. It handles LinkedIn job search automation with proper authentication, rate limiting, and error handling.
 
 ## Features
@@ -25,7 +27,7 @@ This controller provides a REST API that matches Browser Use's interface exactly
 ## API Endpoints
 
 ### Authentication
-All endpoints require a valid Supabase JWT token in the Authorization header:
+By default, this module is not enabled. If you mount these routes, you can require a valid Supabase JWT token:
 ```
 Authorization: Bearer YOUR_SUPABASE_JWT_TOKEN
 ```
