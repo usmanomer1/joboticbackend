@@ -60,8 +60,7 @@ const allowedOrigins = [
   'http://localhost:5174',  // Vite alternative port
   'https://portal.jobotic.ai',
   'https://jobotic.ai',
-  'https://www.jobotic.ai',
-  'https://veracious-meadowlark-646.convex.cloud'  // Convex deployment
+  'https://www.jobotic.ai'
 ];
 
 app.use(cors({
