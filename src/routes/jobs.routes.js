@@ -3,6 +3,7 @@ const router = express.Router();
 const crypto = require('crypto');
 const axios = require('axios');
 const { jobSearchService, aiMatchingService } = require('../services');
+const { authenticateSupabase } = require('../middlewares/supabaseAuth');
 
 /**
  * Helper function to generate unique session ID
@@ -104,8 +105,10 @@ async function processJobsInBackground(sessionId, jobs, resumeText, callbackUrl,
 
 /**
  * Progressive job matching endpoint with webhook callbacks
+ * Now requires Supabase authentication
  */
 router.post('/match',
+  authenticateSupabase,
   async (req, res) => {
     const {
       resumeText,
@@ -115,8 +118,10 @@ router.post('/match',
       numJobs = 100,
       callbackUrl,  // NEW: Client provides their callback URL
       sessionId,    // NEW: Accept sessionId from Convex
-      userId // Optional, just for logging
     } = req.body;
+    
+    // Get userId from authenticated user
+    const userId = req.userId || req.user?.id;
 
     // Use provided sessionId or generate one if not provided (for backward compatibility)
     const finalSessionId = sessionId || generateSessionId();
@@ -210,7 +215,7 @@ router.post('/match',
       console.error(`[${requestId}] Match error:`, error);
       res.status(500).json({
         success: false,
-        sessionId,
+        sessionId: finalSessionId,
         error: error.message,
         timestamp: new Date().toISOString()
       });
@@ -232,5 +237,166 @@ router.get('/match/status/:sessionId', (req, res) => {
     message: 'Session tracking not implemented. Use callback URL to receive results.'
   });
 });
+
+/**
+ * SSE endpoint for real-time job matching with streaming
+ * Requires Supabase authentication
+ */
+router.post('/match/stream',
+  authenticateSupabase,
+  async (req, res) => {
+    const {
+      resumeText,
+      query,
+      location,
+      filters = {},
+      numJobs = 100,
+      sessionId,
+      userId
+    } = req.body;
+
+    // Use provided sessionId or generate one
+    const finalSessionId = sessionId || generateSessionId();
+    const requestId = req.id || 'no-request-id';
+    
+    console.log(`[${requestId}] SSE stream request - Session: ${finalSessionId}`);
+    console.log(`[${requestId}] User: ${req.userId || userId || 'anonymous'}`);
+
+    // Set up SSE headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no' // Disable Nginx buffering
+    });
+
+    // Send initial connection event
+    res.write(`event: connected\ndata: ${JSON.stringify({ 
+      sessionId: finalSessionId,
+      status: 'connected',
+      timestamp: new Date().toISOString()
+    })}\n\n`);
+
+    try {
+      // Build search query
+      const searchQuery = query || `${location}`;
+      
+      // Calculate optimal pages
+      const pagesNeeded = Math.ceil(numJobs / 10);
+      const optimalPages = Math.min(pagesNeeded, 10);
+
+      // JSearch request parameters
+      const jsearchParams = {
+        query: searchQuery,
+        page: 1,
+        num_pages: optimalPages,
+        date_posted: filters.datePosted || 'week',
+        work_from_home: filters.remote || false,
+        employment_types: filters.employmentTypes?.join(','),
+        job_requirements: filters.experienceLevel?.join(','),
+        radius: filters.radius || 50,
+      };
+
+      console.log(`[${requestId}] SSE: Fetching jobs from JSearch`);
+      
+      // Send search started event
+      res.write(`event: search_started\ndata: ${JSON.stringify({
+        sessionId: finalSessionId,
+        status: 'searching',
+        query: searchQuery,
+        location,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+
+      // Fetch jobs from JSearch
+      const startTime = Date.now();
+      const searchResults = await jobSearchService.searchJobs(jsearchParams);
+      const jobs = searchResults.data || [];
+      const fetchTime = Date.now() - startTime;
+      
+      console.log(`[${requestId}] SSE: Found ${jobs.length} jobs in ${fetchTime}ms`);
+
+      // Send jobs found event
+      res.write(`event: jobs_found\ndata: ${JSON.stringify({
+        sessionId: finalSessionId,
+        totalFound: jobs.length,
+        fetchTime,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+
+      // Process and stream jobs in batches
+      const BATCH_SIZE = 10;
+      const totalBatches = Math.ceil(jobs.length / BATCH_SIZE);
+      
+      for (let i = 0; i < jobs.length; i += BATCH_SIZE) {
+        const batchIndex = Math.floor(i / BATCH_SIZE);
+        const batch = jobs.slice(i, i + BATCH_SIZE);
+        
+        try {
+          console.log(`[${finalSessionId}] SSE: Processing batch ${batchIndex + 1}/${totalBatches}`);
+          
+          // Process batch with AI enhancement
+          const batchStartTime = Date.now();
+          const enhancedBatch = await aiMatchingService.enhancedAnalysis(batch, resumeText);
+          const processingTime = Date.now() - batchStartTime;
+          
+          // Send batch event
+          res.write(`event: batch\ndata: ${JSON.stringify({
+            sessionId: finalSessionId,
+            batchIndex,
+            batchCount: totalBatches,
+            jobs: enhancedBatch,
+            isLastBatch: batchIndex === totalBatches - 1,
+            processedCount: Math.min((batchIndex + 1) * BATCH_SIZE, jobs.length),
+            totalCount: jobs.length,
+            processingTime,
+            timestamp: new Date().toISOString()
+          })}\n\n`);
+          
+          console.log(`[${finalSessionId}] SSE: Batch ${batchIndex + 1} sent (${processingTime}ms)`);
+          
+          // Small delay between batches
+          if (batchIndex < totalBatches - 1) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          
+        } catch (batchError) {
+          console.error(`[${finalSessionId}] SSE: Batch ${batchIndex + 1} error:`, batchError.message);
+          
+          // Send error event for this batch
+          res.write(`event: batch_error\ndata: ${JSON.stringify({
+            sessionId: finalSessionId,
+            batchIndex,
+            error: batchError.message,
+            timestamp: new Date().toISOString()
+          })}\n\n`);
+        }
+      }
+
+      // Send completion event
+      res.write(`event: complete\ndata: ${JSON.stringify({
+        sessionId: finalSessionId,
+        status: 'completed',
+        totalProcessed: jobs.length,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+      
+      console.log(`[${finalSessionId}] SSE: Stream completed`);
+      
+    } catch (error) {
+      console.error(`[${requestId}] SSE error:`, error);
+      
+      // Send error event
+      res.write(`event: error\ndata: ${JSON.stringify({
+        sessionId: finalSessionId,
+        error: error.message,
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+    } finally {
+      // Close the connection
+      res.end();
+    }
+  }
+);
 
 module.exports = router;
