@@ -6,15 +6,13 @@ A focused Node.js/Express backend service for job search and AI-powered job matc
 
 ### **Production API Details**
 - **API Base URL**: `https://your-app.railway.app` (replace with your Railway URL)
-- **API Key**: `9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c`
-- **Authentication**: Include `X-API-Key` header in all requests
+- **Authentication**: None by default (see optional auth below)
 - **Frontend Domain**: `https://portal.jobotic.ai`
 
 ### **Required Headers for All API Calls**
 ```javascript
 {
-  'Content-Type': 'application/json',
-  'X-API-Key': '9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c'
+  'Content-Type': 'application/json'
 }
 ```
 
@@ -109,8 +107,9 @@ http://localhost:3001/api
 ```
 
 ### Authentication
-- **Development**: No authentication required
-- **Production**: Requires API key authentication via `X-API-Key` header
+- **Default (dev & prod)**: No authentication required
+- **Optional API Key (prod)**: You can enable API key auth via `X-API-Key` (see "Optional authentication" below)
+- **Optional Supabase JWT**: Middleware exists but is NOT applied by default
 
 ### Rate Limiting
 - General endpoints: 100 requests per 15 minutes per IP
@@ -902,7 +901,7 @@ For issues and questions:
 
 ---
 
-## 🔐 Production API Key Authentication Setup
+## 🔐 Optional authentication
 
 ### For Backend Developer
 
@@ -917,7 +916,7 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 API_KEY=your_generated_api_key_here
 ```
 
-3. **Add authentication middleware** (create `src/middleware/auth.js`):
+3. **Add API key middleware** (create `src/middleware/auth.js`):
 ```javascript
 const authenticateApiKey = (req, res, next) => {
   // Skip authentication in development
@@ -954,16 +953,26 @@ const authenticateApiKey = (req, res, next) => {
 module.exports = { authenticateApiKey };
 ```
 
-4. **Apply middleware to protected routes**:
+4. **Apply middleware to protected routes (disabled by default)**:
 ```javascript
 const { authenticateApiKey } = require('./middleware/auth');
 
-// Apply to all API routes
-app.use('/api', authenticateApiKey);
+// Example only: Not enabled by default in server.js
+// app.use('/api', authenticateApiKey);
+// app.use('/api/jobs', authenticateApiKey);
+// app.use('/api/resume', authenticateApiKey);
 
-// Or apply to specific routes
-app.use('/api/jobs', authenticateApiKey);
-app.use('/api/resume', authenticateApiKey);
+### Supabase JWT (optional)
+
+The middleware `src/middleware/supabaseAuth.js` provides:
+- `authenticateSupabaseUser`: requires `Authorization: Bearer <token>`
+- `optionalSupabaseAuth`: authenticates if header present
+
+These are not applied by default. To require Supabase auth for jobs routes:
+```js
+const { authenticateSupabaseUser } = require('./src/middleware/supabaseAuth');
+app.use('/api/jobs', authenticateSupabaseUser);
+```
 ```
 
 ### For Frontend Developer
