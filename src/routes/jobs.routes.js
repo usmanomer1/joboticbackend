@@ -146,8 +146,12 @@ router.post('/match',
         num_pages: optimalPages,
         date_posted: filters.datePosted || 'week',
         work_from_home: filters.remote || false,
-        employment_types: filters.employmentTypes?.join(','),
-        job_requirements: filters.experienceLevel?.join(','),
+        employment_types: Array.isArray(filters.employmentTypes) 
+          ? filters.employmentTypes.join(',') 
+          : filters.employmentTypes,
+        job_requirements: Array.isArray(filters.experienceLevel) 
+          ? filters.experienceLevel.join(',') 
+          : filters.experienceLevel,
         radius: filters.radius || 50,
       };
 
@@ -292,8 +296,12 @@ router.post('/match/stream',
         num_pages: optimalPages,
         date_posted: filters.datePosted || 'week',
         work_from_home: filters.remote || false,
-        employment_types: filters.employmentTypes?.join(','),
-        job_requirements: filters.experienceLevel?.join(','),
+        employment_types: Array.isArray(filters.employmentTypes) 
+          ? filters.employmentTypes.join(',') 
+          : filters.employmentTypes,
+        job_requirements: Array.isArray(filters.experienceLevel) 
+          ? filters.experienceLevel.join(',') 
+          : filters.experienceLevel,
         radius: filters.radius || 50,
       };
 
