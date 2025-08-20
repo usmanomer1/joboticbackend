@@ -1,9 +1,16 @@
 const { createClient } = require('@supabase/supabase-js');
 
-// Initialize Supabase client
-const supabase = createClient(
+// Initialize Supabase Admin client with service role key
+const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false
+    }
+  }
 );
 
 /**
@@ -16,20 +23,24 @@ const authenticateSupabase = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('Auth check: Missing authorization header');
       return res.status(401).json({ 
         error: 'Missing or invalid authorization header' 
       });
     }
 
     const token = authHeader.replace('Bearer ', '');
+    console.log('Auth check: Token received, length:', token.length);
 
-    // Verify the JWT token with Supabase
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    // Verify the JWT token using the admin client
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
     if (error || !user) {
-      console.error('Supabase auth error:', error);
+      console.error('Supabase auth error:', error ? error.message : 'No user found');
+      console.error('Full error:', error);
       return res.status(401).json({ 
-        error: 'Invalid or expired token' 
+        error: 'Invalid or expired token',
+        details: error ? error.message : 'User not found'
       });
     }
 
@@ -38,7 +49,7 @@ const authenticateSupabase = async (req, res, next) => {
     req.userId = user.id;
     
     // Log successful authentication
-    console.log(`Authenticated user: ${user.email} (${user.id})`);
+    console.log(`Authenticated user: ${user.email || 'unknown'} (${user.id})`);
     
     next();
   } catch (error) {
@@ -63,7 +74,7 @@ const optionalSupabaseAuth = async (req, res, next) => {
     }
 
     const token = authHeader.replace('Bearer ', '');
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    const { data: { user }, error } = await supabaseAdmin.auth.getUser(token);
 
     if (!error && user) {
       req.user = user;
