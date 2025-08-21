@@ -122,11 +122,15 @@ class JobSearchService {
       if (params.remote_jobs_only) {
         requestParams.work_from_home = true;
       }
-      if (params.employment_types && params.employment_types.length > 0) {
-        requestParams.employment_types = params.employment_types.join(',');
+      if (params.employment_types) {
+        requestParams.employment_types = Array.isArray(params.employment_types) 
+          ? params.employment_types.join(',')
+          : params.employment_types;
       }
-      if (params.job_requirements && params.job_requirements.length > 0) {
-        requestParams.job_requirements = params.job_requirements.join(',');
+      if (params.job_requirements) {
+        requestParams.job_requirements = Array.isArray(params.job_requirements)
+          ? params.job_requirements.join(',')
+          : params.job_requirements;
       }
       
       console.log('Getting job count with params:', requestParams);
@@ -287,12 +291,16 @@ class JobSearchService {
         requestParams.work_from_home = true;
       }
       
-      if (params.employment_types && params.employment_types.length > 0) {
-        requestParams.employment_types = params.employment_types.join(',');
+      if (params.employment_types) {
+        requestParams.employment_types = Array.isArray(params.employment_types)
+          ? params.employment_types.join(',')
+          : params.employment_types;
       }
       
-      if (params.job_requirements && params.job_requirements.length > 0) {
-        requestParams.job_requirements = params.job_requirements.join(',');
+      if (params.job_requirements) {
+        requestParams.job_requirements = Array.isArray(params.job_requirements)
+          ? params.job_requirements.join(',')
+          : params.job_requirements;
       }
       
       // Log the actual parameters being sent to JSearch
