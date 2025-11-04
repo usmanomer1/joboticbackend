@@ -26,9 +26,9 @@ const authenticateApiKey = (req, res, next) => {
     // Debug logging (remove in production)
     if (process.env.NODE_ENV === 'development') {
       console.log('API Key validation failed:');
-      console.log('Received:', apiKey);
-      console.log('Expected:', process.env.API_KEY);
-      console.log('Match:', apiKey === process.env.API_KEY);
+      console.log('Received length:', apiKey?.length || 0);
+      console.log('Expected length:', process.env.API_KEY?.length || 0);
+      console.log('First 4 chars match:', apiKey?.substring(0, 4) === process.env.API_KEY?.substring(0, 4));
     }
     
     return res.status(403).json({

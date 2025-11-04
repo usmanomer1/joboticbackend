@@ -15,3 +15,9 @@ downloads/
 RAILWAY_ENV_VARS.txt
 config/*-keys.js
 config/*.secret.js
+
+# MCP Configuration with sensitive tokens
+.mcp.json
+
+# Railway setup scripts (use templates instead)
+.env.railway

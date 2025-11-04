@@ -984,7 +984,7 @@ app.use('/api/jobs', authenticateSupabaseUser);
 ```javascript
 // JavaScript/React example
 const API_BASE_URL = 'https://your-app.railway.app/api';
-const API_KEY = '9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c'; // Store securely in environment variables
+const API_KEY = process.env.REACT_APP_API_KEY; // Store securely in environment variables
 
 const apiRequest = async (endpoint, options = {}) => {
   const url = `${API_BASE_URL}${endpoint}`;
@@ -1025,7 +1025,7 @@ const matchJobs = async (resumeData) => {
 **Environment Variables for Frontend**:
 ```env
 REACT_APP_API_BASE_URL=https://your-app.railway.app/api
-REACT_APP_API_KEY=9f754142ac82d571e1cb8ed3c85d4f1d9a141f9345728fe382e611c3832d770c
+REACT_APP_API_KEY=your_backend_api_key_here
 ```
 
 ## 🚀 Railway Deployment
