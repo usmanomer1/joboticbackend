@@ -21,3 +21,18 @@ config/*.secret.js
 
 # Railway setup scripts (use templates instead)
 .env.railway
+
+# Test files and outputs
+*.pdf
+test-*.pdf
+optimized_resume_*.pdf
+resume_*.pdf
+test-output-*.pdf
+quick-test-curl.txt
+
+# Logos and images (store in assets folder if needed)
+*.png
+*.jpg
+*.jpeg
+logo-*.png
+employer-logo-*.png
